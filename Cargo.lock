@@ -67,6 +67,43 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ad32ce52e4161730f7098c077cd2ed6229b5804ccf99e5366be1ab72a98b4e1"
 
 [[package]]
+name = "api-groupify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "axum",
+ "axum-prometheus",
+ "base64 0.21.7",
+ "chrono",
+ "dotenv",
+ "hex",
+ "hyper 1.2.0",
+ "jsonwebtoken",
+ "metrics 0.21.1",
+ "metrics-exporter-prometheus",
+ "once_cell",
+ "rand",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sha3",
+ "sqlx",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tower-sessions",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1728,43 +1765,6 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rust"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "axum",
- "axum-prometheus",
- "base64 0.21.7",
- "chrono",
- "dotenv",
- "hex",
- "hyper 1.2.0",
- "jsonwebtoken",
- "metrics 0.21.1",
- "metrics-exporter-prometheus",
- "once_cell",
- "rand",
- "reqwest",
- "secrecy",
- "serde",
- "serde_json",
- "serde_urlencoded",
- "sha3",
- "sqlx",
- "thiserror",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tower-sessions",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
