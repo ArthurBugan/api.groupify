@@ -1,8 +1,8 @@
 create table if not exists channels
 (
     id text not null primary key,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     group_id text not null references groups (id),
     name text not null,
     thumbnail text not null,

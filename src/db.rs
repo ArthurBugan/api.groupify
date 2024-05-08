@@ -1,27 +1,26 @@
 use crate::utils::internal_error;
 
-use std::collections::HashMap;
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
-use sqlx::{Executor, FromRow, Row, Sqlite, SqlitePool, Transaction};
-use tokio::sync::RwLock;
+use axum::extract::{Path, State};
 use axum::http::{Response, StatusCode};
 use axum::Json;
-use axum::extract::{Path, State};
 use chrono::{DateTime, NaiveDateTime, Utc};
-use rand::{Rng, thread_rng};
+use once_cell::sync::Lazy;
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use sha3::Digest;
+use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-
-use crate::{InnerState};
+use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
 
-/// Represents a book, taken from the books table in SQLite.
+/// Represents a book, taken from the books table in Postgres.
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct Book {
     /// The book's primary key ID
@@ -65,10 +64,10 @@ static CACHE: Lazy<BookCache> = Lazy::new(BookCache::new);
 ///
 /// ## Returns
 /// * A ready-to-use connection pool.
-pub async fn init_db() -> Result<SqlitePool> {
+pub async fn init_db() -> Result<PgPool> {
     let database_url = std::env::var("DATABASE_URL")?;
 
-    let connection_pool = SqlitePool::connect(&database_url).await?;
+    let connection_pool = PgPool::connect(&database_url).await?;
     sqlx::migrate!().run(&connection_pool).await?;
     Ok(connection_pool)
 }
@@ -80,7 +79,7 @@ pub async fn init_db() -> Result<SqlitePool> {
 ///
 /// ## Returns
 /// * A vector of books, or an error.
-pub async fn all_books(connection_pool: &SqlitePool) -> Result<Vec<Book>> {
+pub async fn all_books(connection_pool: &PgPool) -> Result<Vec<Book>> {
     if let Some(all_books) = CACHE.all_books().await {
         Ok(all_books)
     } else {
@@ -97,7 +96,7 @@ pub async fn all_books(connection_pool: &SqlitePool) -> Result<Vec<Book>> {
 /// ## Arguments
 /// * `connection_pool` - the database connection pool to use
 /// * `id` - the primary key of the book to retrieve
-pub async fn book_by_id(connection_pool: &SqlitePool, id: i32) -> Result<Book> {
+pub async fn book_by_id(connection_pool: &PgPool, id: i32) -> Result<Book> {
     Ok(sqlx::query_as::<_, Book>("SELECT * FROM books WHERE id=$1")
         .bind(id)
         .fetch_one(connection_pool)
@@ -113,11 +112,7 @@ pub async fn book_by_id(connection_pool: &SqlitePool, id: i32) -> Result<Book> {
 ///
 /// ## Returns
 /// * The primary key value of the new book
-pub async fn add_book<S: ToString>(
-    connection_pool: &SqlitePool,
-    title: S,
-    author: S,
-) -> Result<i32> {
+pub async fn add_book<S: ToString>(connection_pool: &PgPool, title: S, author: S) -> Result<i32> {
     let title = title.to_string();
     let author = author.to_string();
     let id = sqlx::query("INSERT INTO books (title, author) VALUES ($1, $2) RETURNING id")
@@ -136,7 +131,7 @@ pub async fn add_book<S: ToString>(
 /// * `connection_pool` - the database connection to use
 /// * `book` - the book object to update. The primary key will be used to
 ///            determine which row is updated.
-pub async fn update_book(connection_pool: &SqlitePool, book: &Book) -> Result<()> {
+pub async fn update_book(connection_pool: &PgPool, book: &Book) -> Result<()> {
     sqlx::query("UPDATE books SET title=$1, author=$2 WHERE id=$3")
         .bind(&book.title)
         .bind(&book.author)
@@ -152,7 +147,7 @@ pub async fn update_book(connection_pool: &SqlitePool, book: &Book) -> Result<()
 /// ## Arguments
 /// * `connection_pool` - the database connection to use
 /// * `id` - the primary key of the book to delete
-pub async fn delete_book(connection_pool: &SqlitePool, id: i32) -> Result<()> {
+pub async fn delete_book(connection_pool: &PgPool, id: i32) -> Result<()> {
     sqlx::query("DELETE FROM books WHERE id=$1")
         .bind(id)
         .execute(connection_pool)

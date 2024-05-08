@@ -1,7 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
 use reqwest::{Client, Request, Response};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, Row, SqlitePool};
+use sqlx::{FromRow, PgPool, Row};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Debug)]
 pub struct EmailClient {
@@ -55,14 +55,8 @@ impl EmailClient {
                 "X-Postmark-Server-Token",
                 self.authorization_token.to_owned(),
             )
-            .header(
-                "Accept",
-                "application/json".to_owned(),
-            )
-            .header(
-                "Content-Type",
-                "application/json".to_owned(),
-            )
+            .header("Accept", "application/json".to_owned())
+            .header("Content-Type", "application/json".to_owned())
             .json(&request_body)
             .build()?;
 
@@ -78,13 +72,24 @@ fn request_to_curl(request: &Request) -> Result<String, reqwest::Error> {
     let command = format!("curl -X {} '{}'", request.method(), request.url());
 
     // Add headers to the curl command
-    let mut command = request.headers().iter().fold(command, |cmd, (name, value)| {
-        format!("{} -H '{}: {}'", cmd, name.as_str(), value.to_str().unwrap())
-    });
+    let mut command = request
+        .headers()
+        .iter()
+        .fold(command, |cmd, (name, value)| {
+            format!(
+                "{} -H '{}: {}'",
+                cmd,
+                name.as_str(),
+                value.to_str().unwrap()
+            )
+        });
 
     // Add request body to the curl command
     if let Some(body) = request.body() {
-        if let Some(Ok(body_str)) = body.as_bytes().and_then(|bytes| Some(String::from_utf8(bytes.to_vec()))) {
+        if let Some(Ok(body_str)) = body
+            .as_bytes()
+            .and_then(|bytes| Some(String::from_utf8(bytes.to_vec())))
+        {
             command.push_str(&format!(" -d '{}'", body_str));
         }
     }

@@ -1,23 +1,22 @@
 use crate::utils::internal_error;
 
-use std::collections::HashMap;
 use anyhow::{Context, Result};
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
-use sqlx::{Executor, FromRow, Row, Sqlite, SqlitePool, Transaction};
-use tokio::sync::RwLock;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, Response, StatusCode};
 use axum::Json;
-use axum::extract::{Path, State};
-use chrono::{DateTime, NaiveDateTime, Utc};
-use rand::{Rng, thread_rng};
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use once_cell::sync::Lazy;
 use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use serde_json::to_string_pretty;
 use sha3::Digest;
+use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 
-
-use crate::{InnerState};
+use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
 
@@ -25,8 +24,8 @@ use crate::email::{EmailClient, SendEmailRequest};
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
     pub id: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
     pub group_id: String,
     pub name: String,
     pub thumbnail: String,
@@ -34,8 +33,11 @@ pub struct Channel {
     pub user_id: String,
 }
 
-
-pub async fn all_channels(State(inner): State<InnerState>, headers: HeaderMap, Path(user_id): Path<String>) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
+pub async fn all_channels(
+    State(inner): State<InnerState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);
     let InnerState { db, .. } = inner;
 
@@ -52,14 +54,17 @@ pub async fn all_channels(State(inner): State<InnerState>, headers: HeaderMap, P
             .bind(user_id)
             .fetch_all(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
 
     Ok(Json(channels))
 }
 
-pub async fn create_channel(State(inner): State<InnerState>, Json(channel): Json<Channel>) -> Result<Json<Channel>, (StatusCode, String)> {
+pub async fn create_channel(
+    State(inner): State<InnerState>,
+    Json(channel): Json<Channel>,
+) -> Result<Json<Channel>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
     let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);

@@ -2,3 +2,5 @@
 
 .env
 sqlite.db
+Secrets*.toml
+.idea

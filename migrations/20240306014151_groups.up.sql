@@ -1,8 +1,8 @@
 create table if not exists groups
 (
     id text not null primary key,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     name text not null,
     icon text not null,
     user_id text not null,

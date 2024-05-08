@@ -1,32 +1,35 @@
 mod auth;
-mod db;
-mod utils;
-mod email;
 mod authentication;
+mod db;
+mod email;
 mod routes;
+mod utils;
 
-use std::collections::HashMap;
 use crate::email::EmailClient;
+use std::collections::HashMap;
 
-use crate::db::{init_db};
+use crate::db::init_db;
 
-use crate::routes::{health_check, confirm, subscribe, all_channels, all_groups, create_channel, create_group, create_link, get_link_statistics, update_link, redirect, login_user, root, Counter};
+use crate::routes::{
+    all_channels, all_groups, confirm, create_channel, create_group, create_link,
+    get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter,
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::authentication::{change_password, forget_password};
 
+use axum::extract::FromRef;
+use axum::response::IntoResponse;
 use axum::routing::{get, patch, post, put};
 use axum::{Extension, Router};
 use axum_prometheus::PrometheusMetricLayer;
+use sqlx::PgPool;
 use std::error::Error;
 use std::sync::Arc;
-use axum::extract::FromRef;
-use axum::response::IntoResponse;
-use sqlx::SqlitePool;
+use time::Duration;
 use tower_http::trace::TraceLayer;
 use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
-use time::Duration;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -38,8 +41,8 @@ const COUNTER_KEY: &str = "counter";
 
 #[derive(Clone)]
 struct InnerState {
-    pub db: SqlitePool,
-    pub email_client: EmailClient
+    pub db: PgPool,
+    pub email_client: EmailClient,
 }
 
 async fn handler(session: Session) -> impl IntoResponse {
@@ -47,7 +50,6 @@ async fn handler(session: Session) -> impl IntoResponse {
     session.insert(COUNTER_KEY, counter.0 + 1).await.unwrap();
     format!("Current count: {}", counter.0)
 }
-
 
 impl FromRef<AppState> for InnerState {
     fn from_ref(app_state: &AppState) -> InnerState {
@@ -84,17 +86,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_secure(false)
         .with_expiry(Expiry::OnInactivity(Duration::days(120)));
 
-    let app_state = InnerState {
-        db,
-        email_client
-    };
-
+    let app_state = InnerState { db, email_client };
 
     let app = Router::new()
         .route("/create", post(create_link))
         .route("/:id/statistics", get(get_link_statistics))
         .route("/:id", patch(update_link).get(redirect))
-
         .route("/metrics", get(|| async move { metric_handle.render() }))
         .route("/health", get(health_check))
 
@@ -102,21 +99,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/channel", post(create_channel))
         .route("/group", post(create_group))
         .route("/channels/:user_id", get(all_channels))
-
         .route("/subscription", post(subscribe))
         .route("/subscription/confirm/:subscription_token", post(confirm))
 
         .route("/", get(root))
         .route("/authorize", post(login_user))
-
         .route("/forget-password", post(forget_password))
         .route("/forget-password/confirm", put(change_password))
-
 
         .layer(TraceLayer::new_for_http())
         .layer(prometheus_layer)
         .layer(session)
-
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")

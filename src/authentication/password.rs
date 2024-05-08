@@ -1,18 +1,21 @@
-use std::collections::HashMap;
-use anyhow::Context;
+use crate::routes::{
+    generate_subscription_token, get_password_confirmation_token_from_user, get_stored_credentials,
+    User,
+};
 use crate::utils::internal_error;
-use crate::routes::{generate_subscription_token, get_stored_credentials, User, get_password_confirmation_token_from_user};
+use anyhow::Context;
+use std::collections::HashMap;
 
-use axum::http::{StatusCode};
+use crate::email::EmailClient;
+use crate::InnerState;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
-use sqlx::{Executor, Sqlite, SqlitePool, Transaction};
+use sqlx::{Executor, PgPool, Postgres, Transaction};
 use url::quirks::password;
-use crate::email::EmailClient;
-use crate::InnerState;
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -38,7 +41,7 @@ pub enum AuthError {
 #[tracing::instrument(name = "Validate credentials", skip(credentials, pool))]
 pub async fn validate_credentials(
     credentials: &Credentials,
-    pool: &SqlitePool,
+    pool: &PgPool,
 ) -> Result<String, AuthError> {
     let mut user_id = None;
     let mut expected_password_hash = String::from(
@@ -67,12 +70,13 @@ pub async fn validate_credentials(
         .map_err(AuthError::InvalidCredentials)
 }
 
-pub async fn forget_password(State(inner): State<InnerState>, Json(user): Json<User>) -> Result<Json<String>, (StatusCode, String)> {
+pub async fn forget_password(
+    State(inner): State<InnerState>,
+    Json(user): Json<User>,
+) -> Result<Json<String>, (StatusCode, String)> {
     let InnerState { email_client, db } = inner;
 
-    let mut transaction = db
-        .begin()
-        .await.map_err(internal_error)?;
+    let mut transaction = db.begin().await.map_err(internal_error)?;
 
     let user_id = get_stored_credentials(&user.email, &db).await?;
 
@@ -80,30 +84,26 @@ pub async fn forget_password(State(inner): State<InnerState>, Json(user): Json<U
 
     store_token(&mut transaction, &user_id.id, &subscription_token).await?;
 
-    transaction
-        .commit()
-        .await.map_err(internal_error)?;
+    transaction.commit().await.map_err(internal_error)?;
 
-     let resp = send_forget_password_email(
-        &email_client,
-        user,
-        &subscription_token,
-    ).await?;
+    let resp = send_forget_password_email(&email_client, user, &subscription_token).await?;
 
     Ok(Json("OK".to_owned()))
 }
 
 #[tracing::instrument(
-name = "Send a confirmation email to a new subscriber",
-skip(email_client, forget_password_token)
+    name = "Send a confirmation email to a new subscriber",
+    skip(email_client, forget_password_token)
 )]
 pub async fn send_forget_password_email(
     email_client: &EmailClient,
     user: User,
-    forget_password_token: &str) -> Result<reqwest::Response, (StatusCode, String)> {
+    forget_password_token: &str,
+) -> Result<reqwest::Response, (StatusCode, String)> {
     let confirmation_link = format!(
         "{}/forget-password/confirm/{}",
-        &String::from("https://groupify.dev"), forget_password_token
+        &String::from("https://groupify.dev"),
+        forget_password_token
     );
 
     let template_id = "35815619";
@@ -112,19 +112,22 @@ pub async fn send_forget_password_email(
     template_model.insert("product_name".to_owned(), "Groupify".to_owned());
     template_model.insert("action_url".to_owned(), confirmation_link);
     template_model.insert("support_email".to_owned(), "admin@groupify.dev".to_owned());
-    template_model.insert("login_url".to_owned(), "https://groupify.dev/login".to_owned());
+    template_model.insert(
+        "login_url".to_owned(),
+        "https://groupify.dev/login".to_owned(),
+    );
 
     let resp = email_client
         .send_email(&user.email, "forget-password", template_model, template_id)
-        .await.
-        map_err(internal_error)?;
+        .await
+        .map_err(internal_error)?;
 
     Ok(resp)
 }
 
 #[tracing::instrument(
-name = "Validate credentials",
-skip(expected_password_hash, password_candidate)
+    name = "Validate credentials",
+    skip(expected_password_hash, password_candidate)
 )]
 fn verify_password_hash(
     expected_password_hash: &str,
@@ -134,10 +137,7 @@ fn verify_password_hash(
         .context("Failed to parse hash in PHC string format.")?;
 
     Argon2::default()
-        .verify_password(
-            password_candidate.as_bytes(),
-            &expected_password_hash,
-        )
+        .verify_password(password_candidate.as_bytes(), &expected_password_hash)
         .context("Invalid password.")
         .map_err(AuthError::InvalidCredentials)
 }
@@ -149,10 +149,15 @@ pub async fn change_password(
 ) -> Result<(StatusCode, String), (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
-    let subscriber_id = get_password_confirmation_token_from_user(&db, password_change.forget_password_token).await?;
+    let subscriber_id =
+        get_password_confirmation_token_from_user(&db, password_change.forget_password_token)
+            .await?;
 
     if password_change.password != password_change.password_confirmation {
-        return Err((StatusCode::BAD_REQUEST, "Passwords are different".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Passwords are different".to_string(),
+        ));
     }
 
     let password_hash = compute_password_hash(password_change.password)?;
@@ -164,12 +169,13 @@ pub async fn change_password(
         recovery_token = null,
         recovery_sent_at = null
         WHERE id = $2
-        "#)
-        .bind(&password_hash)
-        .bind(&subscriber_id)
-        .fetch_optional(&db)
-        .await
-        .map_err(internal_error)?;
+        "#,
+    )
+    .bind(&password_hash)
+    .bind(&subscriber_id)
+    .fetch_optional(&db)
+    .await
+    .map_err(internal_error)?;
 
     return Ok((StatusCode::OK, "Password successfully changed.".to_string()));
 }
@@ -181,22 +187,21 @@ fn compute_password_hash(password: String) -> Result<String, (StatusCode, String
         Version::V0x13,
         Params::new(15000, 2, 1, None).unwrap(),
     )
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(internal_error)?
-        .to_string();
+    .hash_password(password.as_bytes(), &salt)
+    .map_err(internal_error)?
+    .to_string();
     Ok(password_hash)
 }
 
 #[tracing::instrument(
-name = "Store subscription token in the database",
-skip(subscription_token, transaction)
+    name = "Store subscription token in the database",
+    skip(subscription_token, transaction)
 )]
 pub async fn store_token(
-    transaction: &mut Transaction<'_, Sqlite>,
+    transaction: &mut Transaction<'_, Postgres>,
     subscriber_id: &Option<String>,
     subscription_token: &str,
 ) -> Result<(), (StatusCode, String)> {
-
     let query = sqlx::query_as::<_, User>(r#" UPDATE users SET recovery_token = $1, recovery_sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2"#)
         .bind(&subscription_token)
         .bind(subscriber_id);

@@ -1,4 +1,4 @@
-use sqlx::{SqlitePool};
+use sqlx::{PgPool};
 use axum::{http::StatusCode, Json};
 use axum::extract::{Path, State};
 use crate::InnerState;
@@ -27,7 +27,7 @@ pub async fn confirm(
 
 
 #[tracing::instrument(name = "Mark subscriber as confirmed", skip(subscriber_id, pool))]
-pub async fn confirm_subscriber(pool: &SqlitePool, subscriber_id: String) -> Result<String, (StatusCode, String)> {
+pub async fn confirm_subscriber(pool: &PgPool, subscriber_id: String) -> Result<String, (StatusCode, String)> {
 
     let id = sqlx::query_as::<_, User>(r#"UPDATE users SET email_confirmed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $1 returning *"#)
         .bind(subscriber_id)
