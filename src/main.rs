@@ -106,9 +106,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/subscription/confirm/:subscription_token", post(confirm))
 
         .route("/", get(root))
-        .route("/authorize", post(login_user    ))
+        .route("/authorize", post(login_user))
         .route("/forget-password", post(forget_password))
-        .route("/forget-password/confirm", put(change_password))
+        .route("/forget-password/confirm/:forget_password_token", post(change_password))
 
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
