@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
+use crate::authentication::compute_password_hash;
 use crate::routes::Claims;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -71,16 +72,14 @@ pub async fn create_user(
         user.encrypted_password
     );
 
-    let encrypted_password = sha3::Sha3_256::digest(user.encrypted_password.as_bytes());
-
-    let encrypted_password = format!("{:x}", encrypted_password);
+    let password_hash = compute_password_hash(user.encrypted_password).await?;
 
     let query = sqlx::query_as::<_, User>(
         r#"INSERT INTO users (id, email, encrypted_password) values($1, $2, $3) returning *"#,
     )
     .bind(&uuid)
     .bind(user.email)
-    .bind(encrypted_password);
+    .bind(password_hash);
 
     transaction.execute(query).await.map_err(internal_error)?;
     Ok(uuid)

@@ -10,10 +10,11 @@ use crate::email::EmailClient;
 use crate::InnerState;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
+use serde_json::{json, Value};
 use sqlx::{Executor, PgPool, Postgres, Transaction};
 use url::quirks::password;
 
@@ -25,7 +26,6 @@ pub struct Credentials {
 
 #[derive(Deserialize)]
 pub struct PasswordChange {
-    pub forget_password_token: String,
     pub password: String,
     pub password_confirmation: String,
 }
@@ -142,15 +142,16 @@ fn verify_password_hash(
         .map_err(AuthError::InvalidCredentials)
 }
 
-#[tracing::instrument(name = "Change password", skip(inner, password_change))]
+#[tracing::instrument(name = "Change password", skip(inner, password_change, forget_password_token))]
 pub async fn change_password(
     State(inner): State<InnerState>,
+     Path(forget_password_token): Path<String>,
     Json(password_change): Json<PasswordChange>,
-) -> Result<(StatusCode, String), (StatusCode, String)> {
+) -> Result<(StatusCode, Json<Value>), (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
     let subscriber_id =
-        get_password_confirmation_token_from_user(&db, password_change.forget_password_token)
+        get_password_confirmation_token_from_user(&db, forget_password_token)
             .await?;
 
     if password_change.password != password_change.password_confirmation {
@@ -160,7 +161,7 @@ pub async fn change_password(
         ));
     }
 
-    let password_hash = compute_password_hash(password_change.password)?;
+    let password_hash = compute_password_hash(password_change.password).await?;
 
     sqlx::query_as::<_, User>(
         r#"UPDATE users
@@ -177,10 +178,12 @@ pub async fn change_password(
     .await
     .map_err(internal_error)?;
 
-    return Ok((StatusCode::OK, "Password successfully changed.".to_string()));
+    let success = String::from("Password changed");
+
+    return Ok((StatusCode::OK, Json(json!({"data": success.to_string()}))))
 }
 
-fn compute_password_hash(password: String) -> Result<String, (StatusCode, String)> {
+pub async fn compute_password_hash(password: String) -> Result<String, (StatusCode, String)> {
     let salt = SaltString::generate(&mut rand::thread_rng());
     let password_hash = Argon2::new(
         Algorithm::Argon2id,
