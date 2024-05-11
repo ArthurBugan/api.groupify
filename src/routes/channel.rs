@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
+use crate::routes::get_email_from_token;
 
 #[derive(serde::Serialize, Deserialize, FromRow)]
 #[serde(rename_all = "camelCase")]
@@ -36,27 +37,31 @@ pub struct Channel {
 pub async fn all_channels(
     State(inner): State<InnerState>,
     headers: HeaderMap,
-    Path(user_id): Path<String>,
+    Path(group_id): Path<String>,
 ) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);
     let InnerState { db, .. } = inner;
 
+    let email = get_email_from_token(headers).await;
+
     tracing::debug!(
-        "user id {}\
-        headers {:?}",
-        user_id,
-        headers.get("Authorization")
+        "group id {}\
+        email {}",
+        group_id,
+        email
     );
+
 
     let channels = tokio::time::timeout(
         fetch_channels_timeout,
-        sqlx::query_as::<_, Channel>(r#"SELECT * FROM channels where user_id = $1"#)
-            .bind(user_id)
+        sqlx::query_as::<_, Channel>(r#"SELECT c.* FROM channels c, users u where u.id = c.user_id AND c.group_id = $1 AND u.email = $2"#)
+            .bind(group_id)
+            .bind(email)
             .fetch_all(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
 
     Ok(Json(channels))
 }
