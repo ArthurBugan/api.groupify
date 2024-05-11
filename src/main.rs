@@ -29,6 +29,7 @@ use std::error::Error;
 use std::sync::Arc;
 use time::Duration;
 use tower_http::trace::TraceLayer;
+use tower_http::cors::CorsLayer;
 use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -95,24 +96,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/metrics", get(|| async move { metric_handle.render() }))
         .route("/health", get(health_check))
 
-        .route("/groups/:user_id", get(all_groups))
-        .route("/channel", post(create_channel))
+        .route("/groups", get(all_groups))
+        .route("/channels/:group_id", get(all_channels))
+
         .route("/group", post(create_group))
-        .route("/channels/:user_id", get(all_channels))
-        .route("/subscription", post(subscribe))
+        .route("/channel", post(create_channel))
+
+        .route("/registration", post(subscribe))
         .route("/subscription/confirm/:subscription_token", post(confirm))
 
         .route("/", get(root))
-        .route("/authorize", post(login_user))
+        .route("/authorize", post(login_user    ))
         .route("/forget-password", post(forget_password))
         .route("/forget-password/confirm", put(change_password))
 
+        .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .layer(prometheus_layer)
         .layer(session)
         .with_state(app_state);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
         .await
         .expect("Could not initialize TcpListener");
 

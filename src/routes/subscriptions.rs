@@ -53,7 +53,7 @@ pub async fn send_confirmation_email(
     subscription_token: &str,
 ) -> Result<reqwest::Response, (StatusCode, String)> {
     let confirmation_link = format!(
-        "{}/subscriptions/confirm?subscription_token={}",
+        "{}/subscriptions/confirm/{}",
         &String::from("https://groupify.dev"),
         subscription_token
     );
