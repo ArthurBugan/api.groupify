@@ -73,7 +73,7 @@ pub async fn redirect(
         .get("user-agent")
         .map(|value| value.to_str().unwrap_or_default().to_string());
 
-    let insert_statistics_timeout = tokio::time::Duration::from_millis(1000);
+    let insert_statistics_timeout = tokio::time::Duration::from_millis(10000);
 
     let saved_statistics = tokio::time::timeout(
         insert_statistics_timeout,
@@ -110,7 +110,7 @@ pub async fn create_link(
         .to_string();
 
     let new_link_id = generate_id();
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
 
     let new_link = tokio::time::timeout(
         fetch_statistics_timeout,
@@ -139,7 +139,7 @@ pub async fn update_link(
         .map_err(|_| (StatusCode::CONFLICT, "Url malformed".into()))?
         .to_string();
 
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
 
     let link = tokio::time::timeout(
         fetch_statistics_timeout,
@@ -163,7 +163,7 @@ pub async fn get_link_statistics(
 ) -> Result<Json<Vec<CounterLinkStatistics>>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
 
     let statistics = tokio::time::timeout(
         fetch_statistics_timeout,

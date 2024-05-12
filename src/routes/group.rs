@@ -37,24 +37,23 @@ pub struct Group {
 pub async fn all_groups(
     cookies: Cookies,
     State(inner): State<InnerState>,
-    headers: HeaderMap,
 ) -> Result<Json<Vec<Group>>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
-    let fetch_groups_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
 
     let auth_token = cookies
         .get("auth-token")
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-        tracing::debug!(
-            "auth_token {}",
-            auth_token.len(),
-        );
+    tracing::debug!("auth_token {}", auth_token.len(),);
 
-   if auth_token.clone().len() == 0 {
-         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    if auth_token.clone().len() == 0 {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Missing token" })).to_string(),
+        ));
     }
 
     let email = get_email_from_token(auth_token).await;
@@ -78,7 +77,7 @@ pub async fn create_group(
 ) -> Result<Json<Group>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
-    let fetch_groups_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
 
     let uuid = Uuid::new_v4().to_string();
 

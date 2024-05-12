@@ -40,7 +40,7 @@ pub async fn all_channels(
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
 ) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
-    let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
 
     let auth_token = cookies
@@ -48,8 +48,10 @@ pub async fn all_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    tracing::debug!("auth_token {}", auth_token.len(),);
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
     }
 
     let email = get_email_from_token(auth_token).await;
@@ -81,7 +83,7 @@ pub async fn create_channel(
 ) -> Result<Json<Channel>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
-    let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);
+    let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     println!("Received data {:?}", to_string_pretty(&channel));
 
     let uuid = Uuid::new_v4().to_string();
