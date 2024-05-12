@@ -1,13 +1,14 @@
+use crate::authentication::compute_password_hash;
+use crate::routes::Claims;
 use crate::utils::internal_error;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::Json;
 use chrono::NaiveDateTime;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use sha3::Digest;
 use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
-use crate::authentication::compute_password_hash;
-use crate::routes::Claims;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct User {
@@ -47,13 +48,13 @@ pub struct User {
 }
 
 pub trait HeaderValueExt {
-  fn to_string(&self) -> String;
+    fn to_string(&self) -> String;
 }
 
 impl HeaderValueExt for HeaderValue {
-  fn to_string(&self) -> String {
-    self.to_str().unwrap_or_default().to_string()
-  }
+    fn to_string(&self) -> String {
+        self.to_str().unwrap_or_default().to_string()
+    }
 }
 
 #[tracing::instrument(name = "Saving new user in the database", skip(user, transaction))]
@@ -129,17 +130,19 @@ pub async fn get_password_confirmation_token_from_user(
     Ok(id.unwrap_or_else(|| String::new()))
 }
 
-pub async fn get_email_from_token(headers: HeaderMap) -> String {
-let authorization = headers.get("Authorization").map(|x| x.to_string()).expect("Authorization header not found");
-
+pub async fn get_email_from_token(token: String) -> String {
     let token_data = decode::<Claims>(
-        &authorization,
-        &DecodingKey::from_secret(std::env::var("SECRET_TOKEN").expect("SECRET_TOKEN Env must be set").as_ref()),
+        &token,
+        &DecodingKey::from_secret(
+            std::env::var("SECRET_TOKEN")
+                .expect("SECRET_TOKEN Env must be set")
+                .as_ref(),
+        ),
         &Validation::default(),
-    ).expect("Failed to extract the token data");
+    )
+    .expect("Failed to extract the token data");
 
     // Extract the email from the token payload
     let email = token_data.claims.sub;
-
     email
 }

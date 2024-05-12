@@ -27,12 +27,16 @@ use axum_prometheus::PrometheusMetricLayer;
 use sqlx::PgPool;
 use std::error::Error;
 use std::sync::Arc;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderValue;
 use time::Duration;
 use tower_http::trace::TraceLayer;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
+use tracing::info;
 
 struct AppState {
     inner: InnerState,
@@ -89,6 +93,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let app_state = InnerState { db, email_client };
 
+    let origins = [
+        "http://myapp.com:3000".parse().unwrap(),
+        "https://localhost:3000".parse().unwrap(),
+        "https://groupify.dev".parse().unwrap(),
+    ];
+
+    let cors = CorsLayer::new()
+        .allow_headers([CONTENT_TYPE])
+        .allow_origin(origins)
+        .allow_credentials(true);
+
     let app = Router::new()
         .route("/create", post(create_link))
         .route("/:id/statistics", get(get_link_statistics))
@@ -110,8 +125,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/forget-password", post(forget_password))
         .route("/forget-password/confirm/:forget_password_token", post(change_password))
 
-        .layer(CorsLayer::permissive())
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
+        .layer(CookieManagerLayer::new())
         .layer(prometheus_layer)
         .layer(session)
         .with_state(app_state);

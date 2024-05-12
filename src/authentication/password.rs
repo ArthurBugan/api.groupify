@@ -142,17 +142,19 @@ fn verify_password_hash(
         .map_err(AuthError::InvalidCredentials)
 }
 
-#[tracing::instrument(name = "Change password", skip(inner, password_change, forget_password_token))]
+#[tracing::instrument(
+    name = "Change password",
+    skip(inner, password_change, forget_password_token)
+)]
 pub async fn change_password(
     State(inner): State<InnerState>,
-     Path(forget_password_token): Path<String>,
+    Path(forget_password_token): Path<String>,
     Json(password_change): Json<PasswordChange>,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
     let subscriber_id =
-        get_password_confirmation_token_from_user(&db, forget_password_token)
-            .await?;
+        get_password_confirmation_token_from_user(&db, forget_password_token).await?;
 
     if password_change.password != password_change.password_confirmation {
         return Err((

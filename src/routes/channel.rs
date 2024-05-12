@@ -9,11 +9,12 @@ use once_cell::sync::Lazy;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use serde_json::to_string_pretty;
+use serde_json::{json, to_string_pretty, Value};
 use sha3::Digest;
 use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use crate::InnerState;
@@ -35,14 +36,23 @@ pub struct Channel {
 }
 
 pub async fn all_channels(
+    cookies: Cookies,
     State(inner): State<InnerState>,
-    headers: HeaderMap,
     Path(group_id): Path<String>,
 ) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(1000);
     let InnerState { db, .. } = inner;
 
-    let email = get_email_from_token(headers).await;
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.clone().len() == 0 {
+        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let email = get_email_from_token(auth_token).await;
 
     tracing::debug!(
         "group id {}\
@@ -50,7 +60,6 @@ pub async fn all_channels(
         group_id,
         email
     );
-
 
     let channels = tokio::time::timeout(
         fetch_channels_timeout,

@@ -5,22 +5,23 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Response, StatusCode};
 use axum::Json;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use once_cell::sync::Lazy;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use serde_json::to_string_pretty;
+use serde_json::{json, to_string_pretty, Value};
 use sha3::Digest;
 use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
-use jsonwebtoken::{decode, DecodingKey, Validation};
 use tokio::sync::RwLock;
+use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
-use crate::routes::{Claims, get_email_from_token};
+use crate::routes::{get_email_from_token, Claims};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -34,16 +35,29 @@ pub struct Group {
 }
 
 pub async fn all_groups(
+    cookies: Cookies,
     State(inner): State<InnerState>,
-    headers: HeaderMap
+    headers: HeaderMap,
 ) -> Result<Json<Vec<Group>>, (StatusCode, String)> {
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(1000);
 
-    tracing::debug!("headers {:?}", headers);
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
 
-    let email = get_email_from_token(headers).await;
+        tracing::debug!(
+            "auth_token {}",
+            auth_token.len(),
+        );
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let email = get_email_from_token(auth_token).await;
 
     let groups = tokio::time::timeout(
         fetch_groups_timeout,
@@ -65,7 +79,6 @@ pub async fn create_group(
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(1000);
-    println!("Received data {:?}", to_string_pretty(&group));
 
     let uuid = Uuid::new_v4().to_string();
 
