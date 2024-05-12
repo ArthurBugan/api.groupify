@@ -1,18 +1,19 @@
 use crate::authentication::{validate_credentials, Credentials};
-use crate::{COUNTER_KEY, InnerState};
+use crate::InnerState;
 
 use axum::extract::State;
-use axum::{Form, Json};
-use axum::http::{HeaderMap, Response};
+use axum::http::HeaderMap;
+use axum::Json;
 use reqwest::StatusCode;
 
-use serde::{Deserialize, Serialize};
-use axum::body::Body;
-use axum::response::{Html};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use axum::response::Html;
 use axum_typed_multipart::{TryFromMultipart, TypedMultipart};
+use cookie::time::{Duration, OffsetDateTime};
+use cookie::SameSite;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-
+use tower_cookies::{Cookie, Cookies};
 
 use crate::authentication::AuthError;
 
@@ -41,6 +42,7 @@ pub struct FormData {
 }
 
 pub async fn login_user(
+    cookies: Cookies,
     State(inner): State<InnerState>,
     form: TypedMultipart<FormData>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -55,7 +57,20 @@ pub async fn login_user(
         Ok(user_id) => {
             let token = generate_token(&credentials.email.clone());
 
-            Ok(Json(json!({"access_token": token})))
+            let mut now = OffsetDateTime::now_utc();
+            now += Duration::days(60);
+
+            let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
+            let mut cookie = Cookie::new("auth-token", token);
+
+            cookie.set_domain(domain);
+            cookie.set_same_site(SameSite::None);
+            cookie.set_secure(true);
+            cookie.set_path("/");
+            cookie.set_expires(now);
+            cookies.add(cookie);
+
+            Ok(Json(json!({"data": "login completed"})))
         }
         Err(e) => {
             let e = match e {
@@ -63,7 +78,10 @@ pub async fn login_user(
                 AuthError::UnexpectedError(_) => LoginError::UnexpectedError(e.into()),
             };
 
-            Err((StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))
+            Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": e.to_string()})),
+            ))
         }
     }
 }
