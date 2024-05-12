@@ -97,6 +97,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "http://myapp.com:3000".parse().unwrap(),
         "https://localhost:3000".parse().unwrap(),
         "https://groupify.dev".parse().unwrap(),
+        "https://www.youtube.com".parse().unwrap(),
+        "https://youtube.com".parse().unwrap(),
     ];
 
     let cors = CorsLayer::new()
