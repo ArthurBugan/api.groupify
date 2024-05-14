@@ -37,6 +37,42 @@ pub struct Channel {
 
 pub async fn all_channels(
     cookies: Cookies,
+    State(inner): State<InnerState>
+) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
+    let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
+    let InnerState { db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let email = get_email_from_token(auth_token).await;
+
+    tracing::debug!(
+        "email {}",
+        email
+    );
+
+    let channels = tokio::time::timeout(
+        fetch_channels_timeout,
+        sqlx::query_as::<_, Channel>(r#"SELECT c.* FROM channels c, users u where u.id = c.user_id AND u.email = $1"#)
+            .bind(email)
+            .fetch_all(&db),
+    )
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
+
+    Ok(Json(channels))
+}
+
+pub async fn all_channels_by_group(
+    cookies: Cookies,
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
 ) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
