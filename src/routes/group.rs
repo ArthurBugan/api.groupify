@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
-use crate::routes::{get_email_from_token, Claims};
+use crate::routes::{get_email_from_token, Claims, get_user_id_from_token};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +72,7 @@ pub async fn all_groups(
 }
 
 pub async fn create_group(
+    cookies: Cookies,
     State(inner): State<InnerState>,
     Json(group): Json<Group>,
 ) -> Result<Json<Group>, (StatusCode, String)> {
@@ -81,6 +82,17 @@ pub async fn create_group(
 
     let uuid = Uuid::new_v4().to_string();
 
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await;
+
     tracing::debug!(
         "group id {} \
          group created_at {} \
@@ -88,7 +100,7 @@ pub async fn create_group(
          group icon {}",
         uuid,
         group.name,
-        group.user_id,
+        user_id,
         group.icon
     );
 
@@ -100,7 +112,7 @@ pub async fn create_group(
         .bind(uuid)
         .bind(group.name)
         .bind(group.icon)
-        .bind(group.user_id)
+        .bind(user_id)
         .fetch_one(&db),
     )
     .await

@@ -146,3 +146,20 @@ pub async fn get_email_from_token(token: String) -> String {
     let email = token_data.claims.sub;
     email
 }
+
+pub async fn get_user_id_from_token(token: String) -> String {
+    let token_data = decode::<Claims>(
+        &token,
+        &DecodingKey::from_secret(
+            std::env::var("SECRET_TOKEN")
+                .expect("SECRET_TOKEN Env must be set")
+                .as_ref(),
+        ),
+        &Validation::default(),
+    )
+    .expect("Failed to extract the token data");
+
+    // Extract the email from the token payload
+    let user_id = token_data.claims.user_id;
+    user_id
+}

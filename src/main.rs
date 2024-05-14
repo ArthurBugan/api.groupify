@@ -10,10 +10,7 @@ use std::collections::HashMap;
 
 use crate::db::init_db;
 
-use crate::routes::{
-    all_channels, all_groups, confirm, create_channel, create_group, create_link,
-    get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter,
-};
+use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group};
 
 use serde::{Deserialize, Serialize};
 
@@ -114,7 +111,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/health", get(health_check))
 
         .route("/groups", get(all_groups))
-        .route("/channels/:group_id", get(all_channels))
+        .route("/channels", get(all_channels))
+
+        .route("/channels/:group_id", get(all_channels_by_group))
 
         .route("/group", post(create_group))
         .route("/channel", post(create_channel))

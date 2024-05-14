@@ -28,6 +28,7 @@ pub enum LoginError {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
+    pub user_id: String,
     role: String,
     exp: usize,
 }
@@ -55,7 +56,7 @@ pub async fn login_user(
 
     match validate_credentials(&credentials, &db).await {
         Ok(user_id) => {
-            let token = generate_token(&credentials.email.clone());
+            let token = generate_token(&credentials.email.clone(), &user_id.clone());
 
             let mut now = OffsetDateTime::now_utc();
             now += Duration::days(60);
@@ -90,10 +91,11 @@ pub async fn root(headers: HeaderMap) -> Html<String> {
     Html(format!("<h1>{:?}</h1>", headers))
 }
 
-fn generate_token(username: &str) -> String {
+fn generate_token(username: &str, user_id: &str) -> String {
     let key = std::env::var("SECRET_TOKEN").expect("SECRET_TOKEN Env variable must exists");
 
     let claims = Claims {
+        user_id: user_id.to_owned(),
         sub: username.to_owned(),
         role: "user".to_owned(),
         exp: (chrono::Utc::now() + chrono::Duration::days(90)).timestamp() as usize,
