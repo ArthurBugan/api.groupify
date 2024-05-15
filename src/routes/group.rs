@@ -122,3 +122,54 @@ pub async fn create_group(
     println!("Created {:?}", to_string_pretty(&groups));
     Ok(Json(groups))
 }
+
+pub async fn update_group(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(group_id): Path<String>,
+    Json(group): Json<Group>,
+) -> Result<Json<Group>, (StatusCode, String)> {
+    let InnerState { db, .. } = inner;
+
+    let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await;
+
+    tracing::debug!(
+        "group id {} \
+         group name {}\
+         user id {}\
+         group icon {}",
+        group_id,
+        group.name,
+        user_id,
+        group.icon
+    );
+
+    let groups = tokio::time::timeout(
+        fetch_groups_timeout,
+        sqlx::query_as::<_, Group>(
+            r#"UPDATE groups SET name = $2, icon = $3 where id = $1 and user_id = $4 returning *"#,
+        )
+        .bind(group_id)
+        .bind(group.name)
+        .bind(group.icon)
+        .bind(user_id)
+        .fetch_one(&db),
+    )
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
+
+    println!("Created {:?}", to_string_pretty(&groups));
+    Ok(Json(groups))
+}

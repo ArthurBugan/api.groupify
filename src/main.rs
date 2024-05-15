@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::db::init_db;
 
-use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group};
+use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group};
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +26,7 @@ use std::error::Error;
 use std::sync::Arc;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderValue;
+use hyper::Method;
 use time::Duration;
 use tower_http::trace::TraceLayer;
 use tower_http::cors::{Any, CorsLayer};
@@ -99,6 +100,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::PUT, Method::DELETE])
         .allow_headers([CONTENT_TYPE])
         .allow_origin(origins)
         .allow_credentials(true);
@@ -110,13 +112,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/metrics", get(|| async move { metric_handle.render() }))
         .route("/health", get(health_check))
 
-        .route("/groups", get(all_groups))
         .route("/channels", get(all_channels))
-
-        .route("/channels/:group_id", get(all_channels_by_group))
-
-        .route("/group", post(create_group))
         .route("/channel", post(create_channel))
+        .route("/channels/:group_id", get(all_channels_by_group))
+        .route("/channels/:group_id", put(update_channels_in_group))
+
+        .route("/groups", get(all_groups))
+        .route("/group", post(create_group))
+        .route("/group/:group_id", put(update_group))
 
         .route("/registration", post(subscribe))
         .route("/subscription/confirm/:subscription_token", post(confirm))

@@ -20,15 +20,16 @@ use uuid::Uuid;
 use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
-use crate::routes::get_email_from_token;
+use crate::routes::{get_email_from_token, get_user_id_from_token};
 
-#[derive(serde::Serialize, Deserialize, FromRow)]
+#[derive(Serialize, Deserialize, FromRow, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Channel {
     pub id: Option<String>,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
     pub group_id: String,
+    pub channel_id: String,
     pub name: String,
     pub thumbnail: String,
     pub new_content: bool,
@@ -37,7 +38,7 @@ pub struct Channel {
 
 pub async fn all_channels(
     cookies: Cookies,
-    State(inner): State<InnerState>
+    State(inner): State<InnerState>,
 ) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
@@ -47,8 +48,8 @@ pub async fn all_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-   if auth_token.clone().len() == 0 {
-         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    if auth_token.clone().len() == 0 {
+        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
     }
 
     let email = get_email_from_token(auth_token).await;
@@ -86,8 +87,8 @@ pub async fn all_channels_by_group(
 
     tracing::debug!("auth_token {}", auth_token.len(),);
 
-   if auth_token.clone().len() == 0 {
-         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    if auth_token.clone().len() == 0 {
+        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
     }
 
     let email = get_email_from_token(auth_token).await;
@@ -150,6 +151,58 @@ pub async fn create_channel(
         .map_err(internal_error)?
         .map_err(internal_error)?;
 
-    println!("Created {:?}", to_string_pretty(&channels));
     Ok(Json(channels))
+}
+
+pub async fn update_channels_in_group(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Json(channels): Json<Vec<Channel>>,
+) -> Result<Json<String>, (StatusCode, String)> {
+    let InnerState { email_client, db } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+   if auth_token.clone().len() == 0 {
+         return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await;
+
+    let mut tx = db.begin().await.map_err(internal_error)?;
+
+    for channel in channels {
+        let delete_channel = sqlx::query_as::<_, Channel>(r#"DELETE FROM channels WHERE id = $1 AND user_id = $2"#)
+            .bind(&channel.id)
+            .bind(&user_id);
+
+        tracing::debug!(
+         "channel name {}\
+         channel user id {}\
+         channel group id {}",
+        channel.name,
+        channel.user_id,
+        channel.group_id
+    );
+
+        tx.execute(delete_channel).await.map_err(internal_error)?;
+
+        let query = sqlx::query_as::<_, Channel>(r#"INSERT INTO channels (id, group_id, name, thumbnail, new_content, channel_id, user_id) values($1, $2, $3, $4, $5, $6, $7) returning *"#)
+            .bind(&channel.id)
+            .bind(&channel.group_id)
+            .bind(&channel.name)
+            .bind(&channel.thumbnail)
+            .bind(&channel.new_content)
+            .bind(&channel.channel_id)
+            .bind(&user_id);
+
+        tx.execute(query).await.map_err(internal_error)?;
+    }
+
+    tx.commit().await.map_err(internal_error)?;
+
+    Ok(Json("OK".to_owned()))
 }
