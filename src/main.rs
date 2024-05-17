@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::db::init_db;
 
-use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group};
+use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group, save_youtube_channels, fetch_youtube_channels};
 
 use serde::{Deserialize, Serialize};
 
@@ -92,7 +92,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app_state = InnerState { db, email_client };
 
     let origins = [
-        "http://myapp.com:3000".parse().unwrap(),
+        "https://localhost".parse().unwrap(),
+        "http://localhost:3000".parse().unwrap(),
         "https://localhost:3000".parse().unwrap(),
         "https://groupify.dev".parse().unwrap(),
         "https://www.youtube.com".parse().unwrap(),
@@ -128,6 +129,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/authorize", post(login_user))
         .route("/forget-password", post(forget_password))
         .route("/forget-password/confirm/:forget_password_token", post(change_password))
+
+        .route("/youtube-channels", post(save_youtube_channels))
+        .route("/youtube-channels", get(fetch_youtube_channels))
 
         .layer(cors)
         .layer(TraceLayer::new_for_http())
