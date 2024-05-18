@@ -23,7 +23,7 @@ COPY --from=builder /usr/src/myapp/target/release/api-groupify /usr/src/myapp/ap
 RUN apt-get update && apt install -y openssl
 
 # Expose the port your application listens on
-EXPOSE 3000
+EXPOSE 3001
 
 # Set the startup command
 CMD ["./api-groupify"]
