@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use crate::db::init_db;
 
-use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group, save_youtube_channels, fetch_youtube_channels};
+use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group, save_youtube_channels, fetch_youtube_channels, delete_group};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ use crate::authentication::{change_password, forget_password};
 
 use axum::extract::FromRef;
 use axum::response::IntoResponse;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use axum_prometheus::PrometheusMetricLayer;
 use sqlx::PgPool;
@@ -121,6 +121,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/groups", get(all_groups))
         .route("/group", post(create_group))
         .route("/group/:group_id", put(update_group))
+        .route("/group/:group_id", delete(delete_group))
 
         .route("/registration", post(subscribe))
         .route("/subscription/confirm/:subscription_token", post(confirm))
