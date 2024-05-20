@@ -132,7 +132,7 @@ pub async fn all_channels_by_group(
 
 pub async fn fetch_youtube_channels(
     cookies: Cookies,
-    State(inner): State<InnerState>
+    State(inner): State<InnerState>,
 ) -> Result<Json<Vec<YoutubeChannel>>, (StatusCode, String)> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
@@ -162,7 +162,6 @@ pub async fn fetch_youtube_channels(
 
     Ok(Json(channels))
 }
-
 
 
 pub async fn create_channel(
@@ -282,11 +281,12 @@ pub async fn save_youtube_channels(
         return Ok(Json(json!({ "data": "Same size"})));
     }
 
-    sqlx::query!("DELETE FROM youtube_channels WHERE user_id = $1", &user_id)
-        .execute(&db)
-        .await
-        .map_err(internal_error)?;
-
+    if (number_of_channels > 0) {
+        sqlx::query!("DELETE FROM youtube_channels WHERE user_id = $1", &user_id)
+            .execute(&db)
+            .await
+            .map_err(internal_error)?;
+    }
 
     bulk_insert_channels(&db, user_id, &channels).await.
         map_err(internal_error)?;
@@ -321,12 +321,20 @@ async fn bulk_insert_channels(pool: &sqlx::PgPool, user_id: String, channels: &[
     for channel in channels {
         let concat_id = user_id.clone() + &*channel.channel_id.clone();
 
-        let data = format!("{},{},{},{},{},{}\n",
-                           channel.id.as_ref().unwrap(), channel.name, channel.thumbnail, channel.new_content, concat_id, user_id);
+        // Replace commas with periods in each field
+        let id = channel.id.as_ref().unwrap().replace(",", ".");
+        let name = channel.name.replace(",", ".");
+        let thumbnail = channel.thumbnail.replace(",", ".");
+        let new_content = channel.new_content;
+        let channel_id = concat_id.replace(",", ".");
+        let user_id_clean = user_id.replace(",", ".");
+
+        // Construct the data string
+        let data = format!("{},{},{},{},{},{}\n", id, name, thumbnail, new_content, channel_id, user_id_clean);
 
         copy_in.send(data.as_bytes())
             .await
-            .map_err(internal_error).expect("TODO: panic message");
+            .map_err(internal_error).expect("Failed to send data to COPY stream");
     }
 
     // Complete the COPY operation
