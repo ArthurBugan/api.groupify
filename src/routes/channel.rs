@@ -319,7 +319,7 @@ async fn bulk_insert_channels(pool: &sqlx::PgPool, user_id: String, channels: &[
 
     // Iterate over the channels and write them to the COPY stream
     for channel in channels {
-        let concat_id = user_id.clone() + &*channel.channel_id.clone();
+        let concat_id = user_id.clone() + "/" + &*channel.channel_id.clone();
 
         // Replace commas with periods in each field
         let id = channel.id.as_ref().unwrap().replace(",", ".");
