@@ -210,6 +210,7 @@ pub async fn update_channels_in_group(
     Json(channels): Json<Vec<Channel>>,
 ) -> Result<Json<String>, (StatusCode, String)> {
     let InnerState { email_client, db } = inner;
+    let update_groups_timeout = tokio::time::Duration::from_millis(10000);
 
     let auth_token = cookies
         .get("auth-token")
@@ -224,22 +225,21 @@ pub async fn update_channels_in_group(
 
     let mut tx = db.begin().await.map_err(internal_error)?;
 
+    tokio::time::timeout(
+        update_groups_timeout,
+        sqlx::query_as::<_, Channel>(
+            r#"DELETE FROM channels where group_id = $1 and user_id = $2"#,
+        )
+            .bind(channels[0].group_id.clone())
+            .bind(user_id.clone())
+            .fetch_optional(&db),
+    )
+        .await
+        .map_err(internal_error)?
+        .map_err(internal_error)?;
+
+
     for channel in channels {
-        let delete_channel = sqlx::query_as::<_, Channel>(r#"DELETE FROM channels WHERE id = $1 AND user_id = $2"#)
-            .bind(&channel.id)
-            .bind(&user_id);
-
-        tracing::debug!(
-         "channel name {}\
-         channel user id {}\
-         channel group id {}",
-        channel.name,
-        channel.user_id,
-        channel.group_id
-    );
-
-        tx.execute(delete_channel).await.map_err(internal_error)?;
-
         let query = sqlx::query_as::<_, Channel>(r#"INSERT INTO channels (id, group_id, name, thumbnail, new_content, channel_id, user_id) values($1, $2, $3, $4, $5, $6, $7) returning *"#)
             .bind(&channel.id)
             .bind(&channel.group_id)
