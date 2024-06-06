@@ -11,9 +11,9 @@ use crate::db::init_db;
 
 use crate::routes::{
     all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
-    create_link, delete_account, delete_group, fetch_youtube_channels, get_link_statistics,
-    handle_get, handle_post, health_check, login_user, redirect, root, save_youtube_channels,
-    subscribe, update_channels_in_group, update_group, update_link,
+    create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels,
+    get_link_statistics, handle_get, handle_post, health_check, login_user, redirect, root,
+    save_youtube_channels, subscribe, update_channels_in_group, update_group, update_link,
 };
 
 use crate::authentication::{change_password, forget_password};
@@ -143,6 +143,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/account", delete(delete_account))
         .route("/debug", get(handle_get))
         .route("/debug", post(handle_post))
+        .route("/empty-debug", post(empty_debug))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())
