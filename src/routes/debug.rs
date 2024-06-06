@@ -6,6 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Html,
 };
+use bytes::BytesMut;
 
 pub async fn handle_post(
     Extension(state): Extension<SharedState>,
@@ -20,6 +21,7 @@ pub async fn handle_post(
         state.headers.append(key, value.clone());
     }
 
+    state.body.extend_from_slice(b",");
     state.body.extend_from_slice(&body_bytes);
 
     StatusCode::OK
@@ -38,4 +40,16 @@ pub async fn handle_get(Extension(state): Extension<SharedState>) -> Html<String
         "<h1>Headers</h1><pre>{}</pre><h1>Body</h1><pre>{}</pre>",
         headers, body
     ))
+}
+
+pub async fn empty_debug(Extension(state): Extension<SharedState>) -> StatusCode {
+    let mut state = state.write().unwrap();
+
+    let my_string = "Hello, World!";
+    let my_bytes = BytesMut::from(my_string);
+
+    state.headers = HeaderMap::new();
+    state.body = my_bytes;
+
+    StatusCode::OK
 }
