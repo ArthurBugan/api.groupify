@@ -74,7 +74,9 @@ pub async fn forget_password(
     State(inner): State<InnerState>,
     Json(user): Json<User>,
 ) -> Result<Json<String>, (StatusCode, String)> {
-    let InnerState { email_client, db } = inner;
+    let InnerState {
+        email_client, db, ..
+    } = inner;
 
     let mut transaction = db.begin().await.map_err(internal_error)?;
 
@@ -182,7 +184,7 @@ pub async fn change_password(
 
     let success = String::from("Password changed");
 
-    return Ok((StatusCode::OK, Json(json!({"data": success.to_string()}))))
+    return Ok((StatusCode::OK, Json(json!({"data": success.to_string()}))));
 }
 
 pub async fn compute_password_hash(password: String) -> Result<String, (StatusCode, String)> {
