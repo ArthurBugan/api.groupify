@@ -19,7 +19,9 @@ pub async fn subscribe(
     State(inner): State<InnerState>,
     Json(user): Json<User>,
 ) -> Result<Json<String>, (StatusCode, String)> {
-    let InnerState { email_client, db } = inner;
+    let InnerState {
+        email_client, db, ..
+    } = inner;
 
     let mut transaction = db.begin().await.map_err(internal_error)?;
 

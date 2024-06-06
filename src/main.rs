@@ -6,41 +6,41 @@ mod routes;
 mod utils;
 
 use crate::email::EmailClient;
-use std::collections::HashMap;
 
 use crate::db::init_db;
 
-use crate::routes::{all_channels, all_groups, confirm, create_channel, create_group, create_link, get_link_statistics, health_check, login_user, redirect, root, subscribe, update_link, Counter, all_channels_by_group, update_group, update_channels_in_group, save_youtube_channels, fetch_youtube_channels, delete_group, delete_account};
-
-use serde::{Deserialize, Serialize};
+use crate::routes::{
+    all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
+    create_link, delete_account, delete_group, fetch_youtube_channels, get_link_statistics,
+    handle_get, handle_post, health_check, login_user, redirect, root, save_youtube_channels,
+    subscribe, update_channels_in_group, update_group, update_link,
+};
 
 use crate::authentication::{change_password, forget_password};
 
 use axum::extract::FromRef;
-use axum::response::IntoResponse;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::HeaderMap;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use axum_prometheus::PrometheusMetricLayer;
+use bytes::{Bytes, BytesMut};
+use hyper::Method;
 use sqlx::PgPool;
 use std::error::Error;
-use std::sync::Arc;
-use axum::http::header::CONTENT_TYPE;
-use axum::http::HeaderValue;
-use hyper::Method;
 use time::Duration;
+use tower_cookies::CookieManagerLayer;
+use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tower_http::cors::{Any, CorsLayer};
 use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tower_cookies::{Cookie, CookieManagerLayer, Cookies};
-use tracing::info;
+
+use std::sync::{Arc, RwLock};
 
 struct AppState {
     inner: InnerState,
 }
-
-const COUNTER_KEY: &str = "counter";
 
 #[derive(Clone)]
 struct InnerState {
@@ -48,10 +48,10 @@ struct InnerState {
     pub email_client: EmailClient,
 }
 
-async fn handler(session: Session) -> impl IntoResponse {
-    let counter: Counter = session.get(COUNTER_KEY).await.unwrap().unwrap_or_default();
-    session.insert(COUNTER_KEY, counter.0 + 1).await.unwrap();
-    format!("Current count: {}", counter.0)
+#[derive(Default)]
+pub struct HeaderAppState {
+    pub headers: HeaderMap,
+    pub body: BytesMut,
 }
 
 impl FromRef<AppState> for InnerState {
@@ -60,9 +60,12 @@ impl FromRef<AppState> for InnerState {
     }
 }
 
+pub type SharedState = Arc<RwLock<HeaderAppState>>;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
+    let shared_state = Arc::new(RwLock::new(HeaderAppState::default()));
 
     tracing_subscriber::registry()
         .with(
@@ -101,7 +104,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ];
 
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS, Method::PUT, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::OPTIONS,
+            Method::PUT,
+            Method::DELETE,
+        ])
         .allow_headers([CONTENT_TYPE])
         .allow_origin(origins)
         .allow_credentials(true);
@@ -112,35 +121,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/:id", patch(update_link).get(redirect))
         .route("/metrics", get(|| async move { metric_handle.render() }))
         .route("/health", get(health_check))
-
         .route("/channels", get(all_channels))
         .route("/channel", post(create_channel))
         .route("/channels/:group_id", get(all_channels_by_group))
         .route("/channels/:group_id", put(update_channels_in_group))
-
         .route("/groups", get(all_groups))
         .route("/group", post(create_group))
         .route("/group/:group_id", put(update_group))
         .route("/group/:group_id", delete(delete_group))
-
         .route("/registration", post(subscribe))
         .route("/subscription/confirm/:subscription_token", post(confirm))
-
         .route("/", get(root))
         .route("/authorize", post(login_user))
         .route("/forget-password", post(forget_password))
-        .route("/forget-password/confirm/:forget_password_token", post(change_password))
-
+        .route(
+            "/forget-password/confirm/:forget_password_token",
+            post(change_password),
+        )
         .route("/youtube-channels", post(save_youtube_channels))
         .route("/youtube-channels", get(fetch_youtube_channels))
-
         .route("/account", delete(delete_account))
-
+        .route("/debug", get(handle_get))
+        .route("/debug", post(handle_post))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())
         .layer(prometheus_layer)
         .layer(session)
+        .layer(Extension(shared_state))
         .with_state(app_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
