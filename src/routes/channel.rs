@@ -44,6 +44,7 @@ pub struct YoutubeChannel {
     pub id: Option<String>,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
+    pub url: String,
     pub channel_id: String,
     pub name: String,
     pub thumbnail: String,
@@ -273,9 +274,7 @@ pub async fn save_youtube_channels(
     State(inner): State<InnerState>,
     Json(channels): Json<Vec<YoutubeChannel>>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let InnerState {
-        email_client, db, ..
-    } = inner;
+    let InnerState { db, .. } = inner;
 
     let auth_token = cookies
         .get("auth-token")
@@ -330,7 +329,7 @@ async fn bulk_insert_channels(
     let mut transaction = pool.begin().await?;
 
     // Construct the COPY FROM STDIN query
-    let copy_query = "COPY youtube_channels (id, name, thumbnail, new_content, channel_id, user_id) FROM STDIN (FORMAT CSV)";
+    let copy_query = "COPY youtube_channels (id, name, thumbnail, new_content, channel_id, user_id, url) FROM STDIN (FORMAT CSV)";
 
     // Execute the COPY command
     let mut copy_in = transaction.copy_in_raw(copy_query).await?;
@@ -346,11 +345,12 @@ async fn bulk_insert_channels(
         let new_content = channel.new_content;
         let channel_id = concat_id.replace(",", ".");
         let user_id_clean = user_id.replace(",", ".");
+        let clean_url = channel.url.replace(",", ".");
 
         // Construct the data string
         let data = format!(
-            "{},{},{},{},{},{}\n",
-            id, name, thumbnail, new_content, channel_id, user_id_clean
+            "{},{},{},{},{},{},{}\n",
+            id, name, thumbnail, new_content, channel_id, user_id_clean, clean_url
         );
 
         copy_in
