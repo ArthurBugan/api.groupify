@@ -11,7 +11,7 @@ use crate::db::init_db;
 
 use crate::routes::{
     all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
-    create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels,
+    create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels, get_language,
     get_link_statistics, handle_get, handle_post, health_check, login_user, redirect, root,
     save_youtube_channels, subscribe, update_channels_in_group, update_group, update_link,
 };
@@ -24,7 +24,7 @@ use axum::http::HeaderMap;
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use axum_prometheus::PrometheusMetricLayer;
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use hyper::Method;
 use sqlx::PgPool;
 use std::error::Error;
@@ -32,7 +32,7 @@ use time::Duration;
 use tower_cookies::CookieManagerLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tower_sessions::{Expiry, MemoryStore, Session, SessionManagerLayer};
+use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -142,6 +142,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/youtube-channels", get(fetch_youtube_channels))
         .route("/account", delete(delete_account))
         .route("/debug", get(handle_get))
+        .route("/language", get(get_language))
         .route("/debug", post(handle_post))
         .route("/empty-debug", post(empty_debug))
         .layer(cors)

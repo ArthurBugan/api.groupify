@@ -1,18 +1,18 @@
-use axum::extract::State;
 use crate::authentication::compute_password_hash;
 use crate::routes::Claims;
 use crate::utils::internal_error;
-use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use crate::InnerState;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderName};
+use axum::http::{HeaderValue, StatusCode};
 use axum::Json;
 use chrono::NaiveDateTime;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha3::Digest;
-use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
+use sqlx::{Executor, FromRow, PgPool, Postgres, Transaction};
 use tower_cookies::Cookies;
 use uuid::Uuid;
-use crate::InnerState;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct User {
@@ -82,9 +82,9 @@ pub async fn create_user(
     let query = sqlx::query_as::<_, User>(
         r#"INSERT INTO users (id, email, encrypted_password) values($1, $2, $3) returning *"#,
     )
-        .bind(&uuid)
-        .bind(user.email)
-        .bind(password_hash);
+    .bind(&uuid)
+    .bind(user.email)
+    .bind(password_hash);
 
     transaction.execute(query).await.map_err(internal_error)?;
     Ok(uuid)
@@ -144,7 +144,7 @@ pub async fn get_email_from_token(token: String) -> String {
         ),
         &Validation::default(),
     )
-        .expect("Failed to extract the token data");
+    .expect("Failed to extract the token data");
 
     // Extract the email from the token payload
     let email = token_data.claims.sub;
@@ -161,11 +161,21 @@ pub async fn get_user_id_from_token(token: String) -> String {
         ),
         &Validation::default(),
     )
-        .expect("Failed to extract the token data");
+    .expect("Failed to extract the token data");
 
     // Extract the email from the token payload
     let user_id = token_data.claims.user_id;
     user_id
+}
+
+pub async fn get_language(headers: HeaderMap) -> Result<Json<Value>, (StatusCode, String)> {
+    let header_value = match headers.get(HeaderName::from_static("accept-language")) {
+        Some(value) => value.to_str().unwrap_or("").to_string(),
+        None => String::new(),
+    };
+
+    let header_parts: Vec<&str> = header_value.split(',').collect();
+    Ok(Json(json!({ "language": header_parts[1] })))
 }
 
 pub async fn delete_account(
@@ -180,7 +190,10 @@ pub async fn delete_account(
         .unwrap_or_default();
 
     if auth_token.clone().len() == 0 {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Missing token" })).to_string(),
+        ));
     }
 
     let user_id = get_user_id_from_token(auth_token).await;
