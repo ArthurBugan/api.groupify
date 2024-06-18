@@ -174,7 +174,7 @@ pub async fn get_language(headers: HeaderMap) -> Result<Json<Value>, (StatusCode
         None => String::new(),
     };
 
-    let header_parts: Vec<&str> = header_value.split(',').collect();
+    let header_parts: Vec<&str> = header_value.split(|c| c == ',' || c == ';').collect();
     Ok(Json(json!({ "language": header_parts[1] })))
 }
 
