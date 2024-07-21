@@ -60,7 +60,7 @@ pub async fn send_confirmation_email(
         subscription_token
     );
 
-    let template_id = "35795627";
+    let template_id = 2;
 
     let mut template_model = HashMap::new();
     template_model.insert("product_name".to_owned(), "Groupify".to_owned());
@@ -72,7 +72,7 @@ pub async fn send_confirmation_email(
     );
 
     let resp = email_client
-        .send_email(&user.email, "welcome-email", template_model, template_id)
+        .send_email(&user.email, template_model, template_id)
         .await
         .map_err(internal_error)?;
 
