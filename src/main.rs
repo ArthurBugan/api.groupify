@@ -75,11 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let sender_email = std::env::var("EMAIL_SENDER")?;
-
     let email_client = EmailClient::new(
         std::env::var("EMAIL_BASE_URL")?,
-        sender_email,
         std::env::var("EMAIL_TOKEN")?,
     );
 

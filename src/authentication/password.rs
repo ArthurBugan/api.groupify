@@ -108,7 +108,7 @@ pub async fn send_forget_password_email(
         forget_password_token
     );
 
-    let template_id = "35815619";
+    let template_id = 3;
 
     let mut template_model = HashMap::new();
     template_model.insert("product_name".to_owned(), "Groupify".to_owned());
@@ -120,7 +120,7 @@ pub async fn send_forget_password_email(
     );
 
     let resp = email_client
-        .send_email(&user.email, "forget-password", template_model, template_id)
+        .send_email(&user.email, template_model, template_id)
         .await
         .map_err(internal_error)?;
 
