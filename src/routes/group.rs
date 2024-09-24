@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::InnerState;
 
 use crate::email::{EmailClient, SendEmailRequest};
-use crate::routes::{get_email_from_token, Claims, get_user_id_from_token, Channel};
+use crate::routes::{get_email_from_token, get_user_id_from_token, Channel, Claims};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +60,7 @@ pub async fn all_groups(
 
     let groups = tokio::time::timeout(
         fetch_groups_timeout,
-        sqlx::query_as::<_, Group>(r#"SELECT *, g.id as id, g.created_at as created_at, g.updated_at as updated_at FROM groups g, users u where u.id = g.user_id and u.email = $1"#)
+        sqlx::query_as::<_, Group>(r#"SELECT *, g.id as id, g.created_at as created_at, g.updated_at as updated_at FROM groups g, users u where u.id = g.user_id and u.email = $1 ORDER BY name"#)
             .bind(email)
             .fetch_all(&db),
     )
@@ -88,7 +88,10 @@ pub async fn create_group(
         .unwrap_or_default();
 
     if auth_token.clone().len() == 0 {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Missing token" })).to_string(),
+        ));
     }
 
     let user_id = get_user_id_from_token(auth_token).await;
@@ -109,15 +112,15 @@ pub async fn create_group(
         sqlx::query_as::<_, Group>(
             r#"INSERT INTO groups (id, name, icon, user_id) values($1, $2, $3, $4) returning *"#,
         )
-            .bind(uuid)
-            .bind(group.name)
-            .bind(group.icon)
-            .bind(user_id)
-            .fetch_one(&db),
+        .bind(uuid)
+        .bind(group.name)
+        .bind(group.icon)
+        .bind(user_id)
+        .fetch_one(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
 
     println!("Created {:?}", to_string_pretty(&groups));
     Ok(Json(groups))
@@ -139,7 +142,10 @@ pub async fn update_group(
         .unwrap_or_default();
 
     if auth_token.clone().len() == 0 {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Missing token" })).to_string(),
+        ));
     }
 
     let user_id = get_user_id_from_token(auth_token).await;
@@ -189,7 +195,10 @@ pub async fn delete_group(
         .unwrap_or_default();
 
     if auth_token.clone().len() == 0 {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({ "error": "Missing token" })).to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Missing token" })).to_string(),
+        ));
     }
 
     let user_id = get_user_id_from_token(auth_token).await;
@@ -206,26 +215,24 @@ pub async fn delete_group(
         sqlx::query_as::<_, Channel>(
             r#"DELETE FROM channels where group_id = $1 and user_id = $2"#,
         )
-            .bind(group_id.clone())
-            .bind(user_id.clone())
-            .fetch_optional(&db),
+        .bind(group_id.clone())
+        .bind(user_id.clone())
+        .fetch_optional(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
 
     tokio::time::timeout(
         fetch_groups_timeout,
-        sqlx::query_as::<_, Group>(
-            r#"DELETE FROM groups where id = $1 and user_id = $2"#,
-        )
+        sqlx::query_as::<_, Group>(r#"DELETE FROM groups where id = $1 and user_id = $2"#)
             .bind(group_id)
             .bind(user_id)
             .fetch_optional(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await
+    .map_err(internal_error)?
+    .map_err(internal_error)?;
 
     Ok(Json(json!({ "success": "true" })))
 }
