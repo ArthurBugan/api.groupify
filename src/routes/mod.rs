@@ -7,6 +7,7 @@ mod login;
 mod subscription_confirm;
 mod subscriptions;
 mod user;
+mod youtube;
 
 pub use channel::*;
 pub use debug::*;
@@ -17,3 +18,4 @@ pub use login::*;
 pub use subscription_confirm::*;
 pub use subscriptions::*;
 pub use user::*;
+pub use youtube::*;

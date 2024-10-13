@@ -13,8 +13,11 @@ use crate::routes::{
     all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
     create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels, get_language,
     get_link_statistics, handle_get, handle_post, health_check, login_user, redirect, root,
-    save_youtube_channels, subscribe, update_channels_in_group, update_group, update_link,
+    save_youtube_channels, subscribe, sync_channels_from_youtube, update_channels_in_group,
+    update_group, update_link,
 };
+
+use crate::auth::{build_oauth_client, check_google_session, google_callback};
 
 use crate::authentication::{change_password, forget_password};
 
@@ -26,6 +29,7 @@ use axum::{Extension, Router};
 use axum_prometheus::PrometheusMetricLayer;
 use bytes::BytesMut;
 use hyper::Method;
+use oauth2::basic::BasicClient;
 use sqlx::PgPool;
 use std::error::Error;
 use time::Duration;
@@ -46,6 +50,7 @@ struct AppState {
 struct InnerState {
     pub db: PgPool,
     pub email_client: EmailClient,
+    pub oauth_client: BasicClient,
 }
 
 #[derive(Default)]
@@ -89,7 +94,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_secure(false)
         .with_expiry(Expiry::OnInactivity(Duration::days(120)));
 
-    let app_state = InnerState { db, email_client };
+    let oauth_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")?;
+    let oauth_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")?;
+
+    let oauth_client = build_oauth_client(oauth_id.clone(), oauth_secret);
+
+    let app_state = InnerState {
+        db,
+        email_client,
+        oauth_client,
+    };
 
     let origins = [
         "https://localhost".parse().unwrap(),
@@ -142,6 +156,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/language", get(get_language))
         .route("/debug", post(handle_post))
         .route("/empty-debug", post(empty_debug))
+        .route("/auth/google_callback", get(google_callback))
+        .route(
+            "/sync-channels-from-youtube",
+            post(sync_channels_from_youtube),
+        )
+        .route("/check-google-session", get(check_google_session))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())

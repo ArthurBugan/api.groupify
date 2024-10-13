@@ -11,4 +11,4 @@ create table if not exists groups
             references users (id)
 );
 
-CREATE UNIQUE INDEX idx_groups_users_id on users (id);
+CREATE INDEX IF NOT EXISTS idx_groups_users_id on users (id);
