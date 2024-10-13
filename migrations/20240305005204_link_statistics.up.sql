@@ -9,4 +9,4 @@ create table if not exists link_statistics
             references links (id)
 );
 
-CREATE INDEX idx_link_statistics_link_id on link_statistics (link_id);
+CREATE INDEX IF NOT EXISTS idx_link_statistics_link_id on link_statistics (link_id);

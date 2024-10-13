@@ -7,9 +7,6 @@ create table if not exists youtube_channels
     thumbnail text not null,
     new_content boolean,
     channel_id text not null,
-    user_id text not null REFERENCES users (id)
+    user_id text not null REFERENCES users (id),
+    CONSTRAINT unique_channel_user UNIQUE (channel_id,user_id)
 );
-
-ALTER TABLE youtube_channels
-ADD CONSTRAINT unique_channel_user
-UNIQUE (channel_id, user_id);

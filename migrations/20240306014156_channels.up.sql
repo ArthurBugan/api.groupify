@@ -10,4 +10,4 @@ create table if not exists channels
     user_id text not null REFERENCES users (id)
 );
 
-CREATE UNIQUE INDEX idx_groups_channels_id on groups (id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_channels_id on groups (id);
