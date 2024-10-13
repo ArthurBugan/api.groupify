@@ -64,7 +64,7 @@ pub async fn login_user(
             let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
             let mut cookie = Cookie::new("auth-token", token);
 
-            // cookie.set_domain(domain);
+            cookie.set_domain(domain);
             cookie.set_same_site(SameSite::None);
             cookie.set_secure(true);
             cookie.set_path("/");
