@@ -7,7 +7,7 @@ use chrono::{Duration, Local};
 use hyper::StatusCode;
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, RedirectUrl, RefreshToken, TokenResponse, TokenUrl,
+    ClientSecret, RedirectUrl, RefreshToken, RequestTokenError, TokenResponse, TokenUrl,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -32,6 +32,7 @@ pub struct UserProfile {
 }
 
 pub fn build_oauth_client(client_id: String, client_secret: String) -> BasicClient {
+    //let redirect_url = "https://api.groupify.dev/auth/google_callback";
     let redirect_url = "http://localhost:3001/auth/google_callback";
 
     BasicClient::new(
@@ -56,11 +57,44 @@ pub async fn google_callback(
     } = inner;
     let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
 
+    tracing::info!("domain {:?} code {:?}", domain, query.code);
+
     let token = oauth_client
         .exchange_code(AuthorizationCode::new(query.code))
         .request_async(async_http_client)
         .await
-        .map_err(|_| ApiError::OptionError)?;
+        .map_err(|e| {
+            tracing::error!("map error {:?}", e);
+            match e {
+                RequestTokenError::ServerResponse(server_response) => {
+                    // Extract the error response from the server
+                    let error_description = server_response.error_description();
+                    let error_code = server_response.error();
+
+                    println!("Server response error: {:?}", error_code);
+                    if let Some(description) = error_description {
+                        println!("Error description: {:?}", description);
+                    }
+                }
+                RequestTokenError::Request(request_error) => {
+                    // This could be a network or other I/O error
+                    println!("Request error: {:?}", request_error);
+                }
+                RequestTokenError::Parse(parse_error, response) => {
+                    // Error occurred while parsing the response
+                    println!("Parse error: {:?}", parse_error);
+                    println!("Response body: {:?}", response);
+                }
+                _ => {
+                    // Fallback for other kinds of errors (if any)
+                    println!("An unexpected error occurred: {:?}", e);
+                }
+            }
+
+            return ApiError::OptionError;
+        })?;
+
+    tracing::info!("Passou do oauth {:?}", token);
 
     let profile = fetch_user_profile(&token.access_token().secret()).await?;
     let max_age = calculate_token_expiry(token.expires_in()).ok_or(ApiError::OptionError)?;

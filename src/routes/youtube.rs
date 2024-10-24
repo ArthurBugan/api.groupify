@@ -110,10 +110,7 @@ pub async fn sync_channels_from_youtube(
     .await
     .map_err(|err| {
         tracing::error!("Database query error: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Database error".to_string(),
-        )
+        (StatusCode::NOT_FOUND, "Database error".to_string())
     })?;
 
     let expires_at: DateTime<Utc> = bearer.get("expires_at");
