@@ -87,6 +87,15 @@ pub async fn login_user(
     }
 }
 
+pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let mut cookie = Cookie::named("auth-token");
+    cookie.set_same_site(SameSite::None);
+    cookie.make_removal(); // Mark the cookie for removal
+
+    cookies.remove(cookie);
+    Ok(Json(json!({"data": "logout completed"})))
+}
+
 pub async fn root(headers: HeaderMap) -> Html<String> {
     Html(format!("<h1>{:?}</h1>", headers))
 }

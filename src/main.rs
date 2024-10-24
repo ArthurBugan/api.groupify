@@ -12,9 +12,9 @@ use crate::db::init_db;
 use crate::routes::{
     all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
     create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels, get_language,
-    get_link_statistics, handle_get, handle_post, health_check, login_user, redirect, root,
-    save_youtube_channels, subscribe, sync_channels_from_youtube, update_channels_in_group,
-    update_group, update_link,
+    get_link_statistics, handle_get, handle_post, health_check, insert_survey, login_user,
+    logout_user, redirect, root, save_youtube_channels, subscribe, sync_channels_from_youtube,
+    update_channels_in_group, update_group, update_link,
 };
 
 use crate::auth::{build_oauth_client, check_google_session, google_callback};
@@ -144,6 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/subscription/confirm/:subscription_token", post(confirm))
         .route("/", get(root))
         .route("/authorize", post(login_user))
+        .route("/logout", post(logout_user))
         .route("/forget-password", post(forget_password))
         .route(
             "/forget-password/confirm/:forget_password_token",
@@ -162,6 +163,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             post(sync_channels_from_youtube),
         )
         .route("/check-google-session", get(check_google_session))
+        .route("/add-survey", post(insert_survey))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())

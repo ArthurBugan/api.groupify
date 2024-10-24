@@ -213,6 +213,11 @@ pub async fn delete_account(
         .await
         .map_err(internal_error)?;
 
+    sqlx::query!("DELETE FROM sessions WHERE user_id = $1", &user_id)
+        .execute(&db)
+        .await
+        .map_err(internal_error)?;
+
     sqlx::query!("DELETE FROM users WHERE id = $1", &user_id)
         .execute(&db)
         .await

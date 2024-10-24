@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS survey (
+    id SERIAL PRIMARY KEY,
+    survey_text VARCHAR NOT NULL
+);
