@@ -1,16 +1,11 @@
-use crate::routes::get_email_from_token;
-use crate::utils::internal_error;
-
 use anyhow::Result;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sqlx::FromRow;
 use tower_cookies::Cookies;
 
-use crate::InnerState;
+use crate::{errors::AppError, InnerState};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -23,7 +18,7 @@ pub async fn insert_survey(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Json(survey): Json<Survey>,
-) -> Result<Json<Survey>, (StatusCode, String)> {
+) -> Result<Json<Survey>, AppError> {
     let InnerState { db, .. } = inner;
 
     let insert_survey_timeout = tokio::time::Duration::from_millis(10000);
@@ -36,10 +31,7 @@ pub async fn insert_survey(
     tracing::debug!("auth_token {}", auth_token.len(),);
 
     if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+        return Err(AppError::Validation(String::from("No auth token found")));
     }
 
     let survey_created = tokio::time::timeout(
@@ -49,8 +41,7 @@ pub async fn insert_survey(
             .fetch_one(&db),
     )
     .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))??;
 
     Ok(Json(survey_created))
 }

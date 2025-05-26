@@ -1,14 +1,11 @@
 use axum::{extract::State, Json};
 use chrono::{DateTime, Local, Utc};
-use hyper::StatusCode;
 use reqwest::Client;
 use serde_json::{json, Value};
 use tower_cookies::Cookies;
 
 use crate::{
-    auth::renew_token,
-    routes::{get_email_from_token, User},
-    InnerState,
+    auth::renew_token, errors::AppError, routes::{get_email_from_token}, InnerState
 };
 
 use serde::{Deserialize, Serialize};
@@ -85,7 +82,7 @@ pub struct PageInfo {
 pub async fn sync_channels_from_youtube(
     cookies: Cookies,
     State(inner): State<InnerState>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> {
     let InnerState {
         db,
         oauth_client, // Borrow oauth_client here
@@ -99,7 +96,7 @@ pub async fn sync_channels_from_youtube(
         .unwrap_or_default();
 
     // Get the email from the token (assuming get_email_from_token is implemented)
-    let email = get_email_from_token(auth_token).await;
+    let email = get_email_from_token(auth_token).await?;
 
     // Query to get the session id using the email
     let bearer = sqlx::query(
@@ -108,10 +105,7 @@ pub async fn sync_channels_from_youtube(
     .bind(email.clone())
     .fetch_one(&db.clone())
     .await
-    .map_err(|err| {
-        tracing::error!("Database query error: {:?}", err);
-        (StatusCode::NOT_FOUND, "Database error".to_string())
-    })?;
+    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
     let expires_at: DateTime<Utc> = bearer.get("expires_at");
 
@@ -124,16 +118,10 @@ pub async fn sync_channels_from_youtube(
     let bearer = sqlx::query(
         "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
     )
-    .bind(email)
+    .bind(&email)
     .fetch_one(db)
     .await
-    .map_err(|err| {
-        tracing::error!("Database query error: {:?}", err);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Database error".to_string(),
-        )
-    })?;
+    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
     let session_id: String = bearer.get("session_id");
 
@@ -158,30 +146,19 @@ pub async fn sync_channels_from_youtube(
             .bearer_auth(&session_id) // Use the session ID as the bearer token
             .send()
             .await
-            .map_err(|err| {
-                tracing::error!("Request error: {:?}", err);
-                (
-                    StatusCode::BAD_GATEWAY,
-                    "Failed to fetch YouTube data".to_string(),
-                )
-            })?;
+            .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
+
 
         // Check the response status
         if !channels_req.status().is_success() {
             tracing::error!("YouTube API error: {:?}", channels_req.status());
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "YouTube API request failed".to_string(),
-            ));
+            return Err(AppError::Validation(String::from("Could not get the channels list")));
         }
 
         // Parse the YouTube API response into a CompleteYoutubeChannel struct
         let youtube_channel: CompleteYoutubeChannel = channels_req.json().await.map_err(|err| {
             tracing::error!("Failed to parse YouTube API response: {:?}", err);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to parse response".to_string(),
-            )
+            AppError::Validation(String::from("Could not parse the YouTube API response"))
         })?;
 
         // Add the items to the results

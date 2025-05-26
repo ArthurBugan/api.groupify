@@ -1,12 +1,14 @@
-use crate::authentication::{validate_credentials, Credentials};
+use crate::authentication::{validate_credentials, Credentials, AuthError};
 use crate::InnerState;
+use crate::errors::AppError;
 
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::Json;
-use reqwest::StatusCode;
+// StatusCode might not be needed directly in the return type anymore
+// use reqwest::StatusCode; 
 
-use axum::response::Html;
+use axum::response::Html; // Keep if root() or other handlers use it
 use axum_typed_multipart::{TryFromMultipart, TypedMultipart};
 use cookie::time::{Duration, OffsetDateTime};
 use cookie::SameSite;
@@ -14,16 +16,6 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_cookies::{Cookie, Cookies};
-
-use crate::authentication::AuthError;
-
-#[derive(thiserror::Error, Debug)]
-pub enum LoginError {
-    #[error("Authentication failed")]
-    AuthError(#[source] anyhow::Error),
-    #[error("Something went wrong")]
-    UnexpectedError(#[from] anyhow::Error),
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -46,7 +38,7 @@ pub async fn login_user(
     cookies: Cookies,
     State(inner): State<InnerState>,
     form: TypedMultipart<FormData>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json<Value>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let credentials = Credentials {
@@ -54,61 +46,56 @@ pub async fn login_user(
         password: form.password.clone(),
     };
 
-    match validate_credentials(&credentials, &db).await {
-        Ok(user_id) => {
-            let token = generate_token(&credentials.email.clone(), &user_id.clone());
+    let user_id = validate_credentials(&credentials, &db)
+        .await
+        .map_err(|auth_error| match auth_error {
+            AuthError::InvalidCredentials(e) => AppError::Authentication(e.context("Invalid credentials supplied")),
+            AuthError::UnexpectedError(e) => AppError::Unexpected(e.context("Credential validation failed")),
+        })?;
 
-            let mut now = OffsetDateTime::now_utc();
-            now += Duration::days(60);
+    let token = generate_token(&credentials.email, &user_id)?;
 
-            let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
-            let mut cookie = Cookie::new("auth-token", token);
+    let mut now = OffsetDateTime::now_utc();
+    now += Duration::days(60);
 
-            cookie.set_domain(domain);
-            cookie.set_same_site(SameSite::None);
-            cookie.set_secure(true);
-            cookie.set_path("/");
-            cookie.set_expires(now);
-            cookies.add(cookie);
+    let domain = std::env::var("GROUPIFY_HOST")
+        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set")))?;
+    let mut cookie = Cookie::new("auth-token", token);
 
-            Ok(Json(json!({"data": "login completed"})))
-        }
-        Err(e) => {
-            let e = match e {
-                AuthError::InvalidCredentials(_) => LoginError::AuthError(e.into()),
-                AuthError::UnexpectedError(_) => LoginError::UnexpectedError(e.into()),
-            };
+    cookie.set_domain(domain);
+    cookie.set_same_site(SameSite::None);
+    cookie.set_secure(true);
+    cookie.set_path("/");
+    cookie.set_expires(now);
+    cookies.add(cookie);
 
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": e.to_string()})),
-            ))
-        }
-    }
+    Ok(Json(json!({ "data": "login completed" })))
 }
 
-pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> { // Changed return type
     let mut cookie = Cookie::named("auth-token");
     cookie.set_same_site(SameSite::None);
-    cookie.make_removal(); // Mark the cookie for removal
+    cookie.make_removal();
 
     cookies.remove(cookie);
-    Ok(Json(json!({"data": "logout completed"})))
+    Ok(Json(json!({ "data": "logout completed" })))
 }
 
-pub async fn root(headers: HeaderMap) -> Html<String> {
+pub async fn root(headers: HeaderMap) -> Html<String> { // Keep Html if it's the correct response type
     Html(format!("<h1>{:?}</h1>", headers))
 }
 
-fn generate_token(username: &str, user_id: &str) -> String {
-    let key = std::env::var("SECRET_TOKEN").expect("SECRET_TOKEN Env variable must exists");
+fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> { // Changed return type
+    let key = std::env::var("SECRET_TOKEN")
+        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set")))?;
 
     let claims = Claims {
         user_id: user_id.to_owned(),
         sub: username.to_owned(),
-        role: "user".to_owned(),
+        role: "user".to_owned(), // Consider making this dynamic if roles are planned
         exp: (chrono::Utc::now() + chrono::Duration::days(90)).timestamp() as usize,
     };
     let header = Header::new(Algorithm::HS256);
-    encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes())).unwrap()
+    encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes()))
+        .map_err(|e| AppError::Unexpected(anyhow::Error::new(e).context("Failed to encode JWT token")))
 }

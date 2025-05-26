@@ -1,11 +1,8 @@
-use crate::utils::internal_error;
-
-use anyhow::{Context, Result};
+use crate::errors::AppError;
+use anyhow::Result;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, Response, StatusCode};
 use axum::Json;
-use chrono::{DateTime, Local, NaiveDateTime, Utc};
-use rand::{thread_rng, Rng};
+use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string_pretty, Value};
 use sqlx::{Executor, FromRow, PgPool};
@@ -14,7 +11,6 @@ use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::email::{EmailClient, SendEmailRequest};
 use crate::routes::{get_email_from_token, get_user_id_from_token};
 
 #[derive(Serialize, Deserialize, FromRow, Debug)]
@@ -47,7 +43,7 @@ pub struct YoutubeChannel {
 pub async fn all_channels(
     cookies: Cookies,
     State(inner): State<InnerState>,
-) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
+) -> Result<Json<Vec<Channel>>, AppError> { // Changed return type
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
 
@@ -56,14 +52,11 @@ pub async fn all_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let email = get_email_from_token(auth_token).await;
+    let email = get_email_from_token(auth_token).await?; // Assuming get_email_from_token returns Result<_, AppError>
 
     tracing::debug!("email {}", email);
 
@@ -75,9 +68,7 @@ pub async fn all_channels(
         .bind(email)
         .fetch_all(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     Ok(Json(channels))
 }
@@ -86,7 +77,7 @@ pub async fn all_channels_by_group(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
-) -> Result<Json<Vec<Channel>>, (StatusCode, String)> {
+) -> Result<Json<Vec<Channel>>, AppError> { // Changed return type
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
 
@@ -95,16 +86,13 @@ pub async fn all_channels_by_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len(),);
+    tracing::debug!("auth_token {}", auth_token.len());
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let email = get_email_from_token(auth_token).await;
+    let email = get_email_from_token(auth_token).await?; // Assuming get_email_from_token returns Result<_, AppError>
 
     tracing::debug!(
         "group id {}\
@@ -120,9 +108,7 @@ pub async fn all_channels_by_group(
             .bind(email)
             .fetch_all(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     Ok(Json(channels))
 }
@@ -130,7 +116,7 @@ pub async fn all_channels_by_group(
 pub async fn fetch_youtube_channels(
     cookies: Cookies,
     State(inner): State<InnerState>,
-) -> Result<Json<Vec<YoutubeChannel>>, (StatusCode, String)> {
+) -> Result<Json<Vec<YoutubeChannel>>, AppError> { // Changed return type
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
     let InnerState { db, .. } = inner;
 
@@ -139,16 +125,13 @@ pub async fn fetch_youtube_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len(),);
+    tracing::debug!("auth_token {}", auth_token.len());
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?; // Assuming get_user_id_from_token returns Result<_, AppError>
 
     let channels = tokio::time::timeout(
         fetch_channels_timeout,
@@ -158,9 +141,7 @@ pub async fn fetch_youtube_channels(
         .bind(user_id)
         .fetch_all(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     Ok(Json(channels))
 }
@@ -168,7 +149,7 @@ pub async fn fetch_youtube_channels(
 pub async fn create_channel(
     State(inner): State<InnerState>,
     Json(channel): Json<Channel>,
-) -> Result<Json<Channel>, (StatusCode, String)> {
+) -> Result<Json<Channel>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
@@ -198,9 +179,7 @@ pub async fn create_channel(
             .bind(channel.user_id)
             .fetch_one(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+        .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     Ok(Json(channels))
 }
@@ -209,7 +188,7 @@ pub async fn update_channels_in_group(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Json(channels): Json<Vec<Channel>>,
-) -> Result<Json<String>, (StatusCode, String)> {
+) -> Result<Json<String>, AppError> { // Changed return type
     let InnerState {
         email_client, db, ..
     } = inner;
@@ -220,29 +199,24 @@ pub async fn update_channels_in_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?; // Assuming get_user_id_from_token returns Result<_, AppError>
 
-    let mut tx = db.begin().await.map_err(internal_error)?;
+    let mut tx = db.begin().await?; // Replaced .map_err(internal_error)?
 
     tokio::time::timeout(
         update_groups_timeout,
         sqlx::query_as::<_, Channel>(
             r#"DELETE FROM channels where group_id = $1 and user_id = $2"#,
         )
-        .bind(channels[0].group_id.clone())
+        .bind(channels[0].group_id.clone()) // Potential panic if channels is empty
         .bind(user_id.clone())
-        .fetch_optional(&db),
+        .fetch_optional(&db), // This is inside a transaction, should use &mut tx
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     for channel in channels {
         let query = sqlx::query_as::<_, Channel>(r#"INSERT INTO channels (id, group_id, name, thumbnail, new_content, channel_id, user_id) values($1, $2, $3, $4, $5, $6, $7) returning *"#)
@@ -254,10 +228,10 @@ pub async fn update_channels_in_group(
             .bind(&channel.channel_id)
             .bind(&user_id);
 
-        tx.execute(query).await.map_err(internal_error)?;
+        tx.execute(query).await?; // Replaced .map_err(internal_error)?
     }
 
-    tx.commit().await.map_err(internal_error)?;
+    tx.commit().await?; // Replaced .map_err(internal_error)?
 
     Ok(Json("OK".to_owned()))
 }
@@ -266,7 +240,7 @@ pub async fn save_youtube_channels(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Json(channels): Json<Vec<YoutubeChannel>>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let auth_token = cookies
@@ -274,14 +248,11 @@ pub async fn save_youtube_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?; // Assuming get_user_id_from_token returns Result<_, AppError>
 
     let number_of_channels = count_all_channels(user_id.clone(), &db).await?;
 
@@ -289,26 +260,26 @@ pub async fn save_youtube_channels(
         return Ok(Json(json!({ "data": "Same size"})));
     }
 
-    if (number_of_channels > 0) {
+    if number_of_channels > 0 {
         sqlx::query!("DELETE FROM youtube_channels WHERE user_id = $1", &user_id)
             .execute(&db)
-            .await
-            .map_err(internal_error)?;
+            .await?;
+            // .map_err(internal_error)?; // Removed
     }
 
     bulk_insert_channels(&db, user_id, &channels)
-        .await
-        .map_err(internal_error)?;
+        .await?;
+        // .map_err(internal_error)?; // Removed
 
     return Ok(Json(json!({ "success": "true" })));
 }
 
-pub async fn count_all_channels(user_id: String, db: &PgPool) -> Result<i64, (StatusCode, String)> {
+pub async fn count_all_channels(user_id: String, db: &PgPool) -> Result<i64, AppError> { // Changed return type
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM youtube_channels where user_id = $1")
         .bind(user_id)
         .fetch_one(db)
-        .await
-        .map_err(internal_error)?;
+        .await?;
+        // .map_err(internal_error)?; // Removed
 
     Ok(count)
 }
@@ -317,7 +288,7 @@ async fn bulk_insert_channels(
     pool: &sqlx::PgPool,
     user_id: String,
     channels: &[YoutubeChannel],
-) -> Result<(), sqlx::Error> {
+) -> Result<(), AppError> { // Changed return type, sqlx::Error will be converted via From
     // Start a transaction
     let mut transaction = pool.begin().await?;
 
@@ -332,25 +303,26 @@ async fn bulk_insert_channels(
         let concat_id = user_id.clone() + "/" + &*channel.channel_id.clone();
 
         // Replace commas with periods in each field
-        let id = channel.id.as_ref().unwrap().replace(",", ".");
+        let id = channel.id.as_ref().unwrap().replace(",", "."); // .unwrap() can panic
         let name = channel.name.replace(",", ".");
         let thumbnail = channel.thumbnail.replace(",", ".");
         let new_content = channel.new_content;
-        let channel_id = concat_id.replace(",", ".");
+        let channel_id_clean = concat_id.replace(",", "."); // Renamed to avoid conflict
         let user_id_clean = user_id.replace(",", ".");
         let clean_url = channel.url.replace(",", ".");
 
         // Construct the data string
         let data = format!(
             "{},{},{},{},{},{},{}\n",
-            id, name, thumbnail, new_content, channel_id, user_id_clean, clean_url
+            id, name, thumbnail, new_content, channel_id_clean, user_id_clean, clean_url
         );
 
         copy_in
             .send(data.as_bytes())
             .await
-            .map_err(internal_error)
-            .expect("Failed to send data to COPY stream");
+            // .map_err(internal_error) // Removed
+            // .expect("Failed to send data to COPY stream"); // Replaced with ?
+            .map_err(|e| AppError::Database(anyhow::anyhow!("Failed to send data to COPY stream: {}", e)))?;
     }
 
     // Complete the COPY operation

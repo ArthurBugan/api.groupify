@@ -1,38 +1,35 @@
-use crate::utils::internal_error;
-
 use anyhow::Result;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::Json;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use sha3::Digest;
 use sqlx::{Executor, Postgres, Transaction};
 use std::collections::HashMap;
 
 use crate::routes::{create_user, User};
 use crate::InnerState;
+use crate::errors::AppError; // Added
 
 use crate::email::EmailClient;
 
 pub async fn subscribe(
     State(inner): State<InnerState>,
     Json(user): Json<User>,
-) -> Result<Json<String>, (StatusCode, String)> {
+) -> Result<Json<String>, AppError> { // Changed return type
     let InnerState {
         email_client, db, ..
     } = inner;
 
-    let mut transaction = db.begin().await.map_err(internal_error)?;
+    let mut transaction = db.begin().await?; // Changed
 
-    let user_id = create_user(&mut transaction, user.clone()).await?;
+    let user_id = create_user(&mut transaction, user.clone()).await?; // Assuming create_user also returns Result<_, AppError>
     let subscription_token = generate_subscription_token();
 
     store_token(&mut transaction, &user_id, &subscription_token).await?;
 
-    transaction.commit().await.map_err(internal_error)?;
+    transaction.commit().await?; // Changed
 
-    let resp = send_confirmation_email(&email_client, user, &subscription_token).await?;
+    let _resp = send_confirmation_email(&email_client, user, &subscription_token).await?; // Changed, assigned to _resp as it's not used
 
     Ok(Json("OK".to_owned()))
 }
@@ -53,7 +50,7 @@ pub async fn send_confirmation_email(
     email_client: &EmailClient,
     user: User,
     subscription_token: &str,
-) -> Result<reqwest::Response, (StatusCode, String)> {
+) -> Result<reqwest::Response, AppError> { // Changed return type
     let confirmation_link = format!(
         "{}/subscriptions/confirm/{}",
         &String::from("https://groupify.dev"),
@@ -73,8 +70,8 @@ pub async fn send_confirmation_email(
 
     let resp = email_client
         .send_email(&user.email, template_model, template_id)
-        .await
-        .map_err(internal_error)?;
+        .await?;
+        // Assuming email_client.send_email now returns Result<_, AppError> or its error can be converted via ?
 
     Ok(resp)
 }
@@ -87,11 +84,11 @@ pub async fn store_token(
     transaction: &mut Transaction<'_, Postgres>,
     subscriber_id: &str,
     subscription_token: &str,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<(), AppError> { // Changed return type
     let query = sqlx::query_as::<_, User>(r#" UPDATE users SET confirmation_token = $1, updated_at = CURRENT_TIMESTAMP, confirmation_sent_at = CURRENT_TIMESTAMP WHERE id = $2"#)
         .bind(&subscription_token)
         .bind(subscriber_id);
 
-    transaction.execute(query).await.map_err(internal_error)?;
+    transaction.execute(query).await?; // Changed
     Ok(())
 }

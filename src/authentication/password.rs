@@ -2,8 +2,8 @@ use crate::routes::{
     generate_subscription_token, get_password_confirmation_token_from_user, get_stored_credentials,
     User,
 };
-use crate::utils::internal_error;
-use anyhow::Context;
+use crate::errors::AppError;
+use anyhow::{Context};
 use std::collections::HashMap;
 
 use crate::email::EmailClient;
@@ -11,12 +11,11 @@ use crate::InnerState;
 use argon2::password_hash::SaltString;
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{Executor, PgPool, Postgres, Transaction};
-use url::quirks::password;
+
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -55,11 +54,11 @@ pub async fn validate_credentials(
         Ok(user) => {
             // If the Result is Ok, user will contain the User
             user_id = user.id;
-            expected_password_hash = user.encrypted_password;
+            expected_password_hash = user.encrypted_password.unwrap();
         }
         Err(error) => {
             // If the Result is Err, error will contain the Error
-            println!("Error: {:?}", error);
+            tracing::debug!("Error: {:?}", error);
         }
     }
 
@@ -73,24 +72,24 @@ pub async fn validate_credentials(
 pub async fn forget_password(
     State(inner): State<InnerState>,
     Json(user): Json<User>,
-) -> Result<Json<String>, (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> {
     let InnerState {
         email_client, db, ..
     } = inner;
 
-    let mut transaction = db.begin().await.map_err(internal_error)?;
+    let mut transaction = db.begin().await.context("Failed to begin database transaction.")?;
 
-    let user_id = get_stored_credentials(&user.email, &db).await?;
+    let user_id_obj = get_stored_credentials(&user.email, &db).await?;
 
     let subscription_token = generate_subscription_token();
 
-    store_token(&mut transaction, &user_id.id, &subscription_token).await?;
+    store_token(&mut transaction, &user_id_obj.id, &subscription_token).await?;
 
-    transaction.commit().await.map_err(internal_error)?;
+    transaction.commit().await.context("Failed to commit database transaction.")?;
 
-    let resp = send_forget_password_email(&email_client, user, &subscription_token).await?;
+    send_forget_password_email(&email_client, user, &subscription_token).await?;
 
-    Ok(Json("OK".to_owned()))
+    return Ok(Json(json!({ "success": true })))
 }
 
 #[tracing::instrument(
@@ -101,7 +100,7 @@ pub async fn send_forget_password_email(
     email_client: &EmailClient,
     user: User,
     forget_password_token: &str,
-) -> Result<reqwest::Response, (StatusCode, String)> {
+) -> Result<reqwest::Response, AppError> {
     let confirmation_link = format!(
         "{}/forget-password/confirm/{}",
         &String::from("https://groupify.dev"),
@@ -122,7 +121,7 @@ pub async fn send_forget_password_email(
     let resp = email_client
         .send_email(&user.email, template_model, template_id)
         .await
-        .map_err(internal_error)?;
+        .context("Failed to send forget password email.")?;
 
     Ok(resp)
 }
@@ -152,17 +151,15 @@ pub async fn change_password(
     State(inner): State<InnerState>,
     Path(forget_password_token): Path<String>,
     Json(password_change): Json<PasswordChange>,
-) -> Result<(StatusCode, Json<Value>), (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
+    // Assuming get_password_confirmation_token_from_user returns Result<_, AppError> or compatible
     let subscriber_id =
         get_password_confirmation_token_from_user(&db, forget_password_token).await?;
 
     if password_change.password != password_change.password_confirmation {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Passwords are different".to_string(),
-        ));
+        return Err(AppError::Validation(anyhow::anyhow!("Passwords are different").to_string()));
     }
 
     let password_hash = compute_password_hash(password_change.password).await?;
@@ -180,22 +177,24 @@ pub async fn change_password(
     .bind(&subscriber_id)
     .fetch_optional(&db)
     .await
-    .map_err(internal_error)?;
+    .context("Failed to update password in database.")?;
 
     let success = String::from("Password changed");
 
-    return Ok((StatusCode::OK, Json(json!({"data": success.to_string()}))));
+    Ok(Json(json!({"data": success.to_string()})))
 }
 
-pub async fn compute_password_hash(password: String) -> Result<String, (StatusCode, String)> {
+pub async fn compute_password_hash(password: String) -> Result<String, AppError> { // Changed return type
     let salt = SaltString::generate(&mut rand::thread_rng());
+    let params = Params::new(15000, 2, 1, None)
+        .map_err(|e| AppError::Unexpected(anyhow::Error::new(e).context("Failed to create Argon2 params")))?;
     let password_hash = Argon2::new(
         Algorithm::Argon2id,
         Version::V0x13,
-        Params::new(15000, 2, 1, None).unwrap(),
+        params,
     )
     .hash_password(password.as_bytes(), &salt)
-    .map_err(internal_error)?
+    .map_err(|e| AppError::Unexpected(anyhow::Error::new(e).context("Failed to hash password")))?
     .to_string();
     Ok(password_hash)
 }
@@ -208,11 +207,11 @@ pub async fn store_token(
     transaction: &mut Transaction<'_, Postgres>,
     subscriber_id: &Option<String>,
     subscription_token: &str,
-) -> Result<(), (StatusCode, String)> {
+) -> Result<(), AppError> { // Changed return type
     let query = sqlx::query_as::<_, User>(r#" UPDATE users SET recovery_token = $1, recovery_sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2"#)
         .bind(&subscription_token)
         .bind(subscriber_id);
 
-    transaction.execute(query).await.map_err(internal_error)?;
+    transaction.execute(query).await.context("Failed to store token in database.")?;
     Ok(())
 }
