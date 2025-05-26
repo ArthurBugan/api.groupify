@@ -1,24 +1,8 @@
-use crate::utils::internal_error;
-
-use anyhow::{Context, Result};
-use axum::extract::{Path, State};
-use axum::http::{Response, StatusCode};
-use axum::Json;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use anyhow::{Result};
 use once_cell::sync::Lazy;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use serde_json::to_string_pretty;
-use sha3::Digest;
-use sqlx::{Executor, FromRow, PgPool, Postgres, Row, Transaction};
-use std::collections::HashMap;
+use sqlx::{FromRow, PgPool, Row};
 use tokio::sync::RwLock;
-use uuid::Uuid;
-
-use crate::InnerState;
-
-use crate::email::{EmailClient, SendEmailRequest};
 
 /// Represents a book, taken from the books table in Postgres.
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]

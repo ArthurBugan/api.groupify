@@ -3,7 +3,7 @@ mod authentication;
 mod db;
 mod email;
 mod routes;
-mod utils;
+mod errors;
 
 use crate::email::EmailClient;
 
@@ -176,7 +176,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await
         .expect("Could not initialize TcpListener");
 
-    tracing::debug!(
+    tracing::info!(
         "listening on {}",
         listener
             .local_addr()

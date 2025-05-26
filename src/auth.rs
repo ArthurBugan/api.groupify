@@ -1,10 +1,9 @@
 use axum::{
     extract::{Query, State},
-    response::{Html, IntoResponse, Redirect},
+    response::{IntoResponse, Redirect},
     Json,
 };
 use chrono::{Duration, Local};
-use hyper::StatusCode;
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
     ClientSecret, RedirectUrl, RefreshToken, RequestTokenError, TokenResponse, TokenUrl,
@@ -15,11 +14,7 @@ use serde_json::{json, Value};
 use sqlx::{postgres::PgQueryResult, PgPool, Row};
 use tower_cookies::Cookies;
 
-use crate::{
-    routes::get_email_from_token,
-    utils::{internal_error, ApiError},
-    InnerState,
-};
+use crate::{errors::AppError, routes::get_email_from_token, InnerState};
 
 #[derive(Debug, Deserialize)]
 pub struct AuthRequest {
@@ -32,8 +27,8 @@ pub struct UserProfile {
 }
 
 pub fn build_oauth_client(client_id: String, client_secret: String) -> BasicClient {
-    //let redirect_url = "https://api.groupify.dev/auth/google_callback";
-    let redirect_url = "http://localhost:3001/auth/google_callback";
+    let redirect_url = "https://api.groupify.dev/auth/google_callback";
+    //let redirect_url = "http://localhost:3001/auth/google_callback";
 
     BasicClient::new(
         ClientId::new(client_id),
@@ -51,7 +46,7 @@ pub fn build_oauth_client(client_id: String, client_secret: String) -> BasicClie
 pub async fn google_callback(
     State(inner): State<InnerState>,
     Query(query): Query<AuthRequest>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<impl IntoResponse, AppError> {
     let InnerState {
         db, oauth_client, ..
     } = inner;
@@ -91,15 +86,17 @@ pub async fn google_callback(
                 }
             }
 
-            return ApiError::OptionError;
+            AppError::ExternalService(anyhow::anyhow!("Failed to exchange authorization code"))
         })?;
 
     tracing::info!("Passou do oauth {:?}", token);
 
     let profile = fetch_user_profile(&token.access_token().secret()).await?;
-    let max_age = calculate_token_expiry(token.expires_in()).ok_or(ApiError::OptionError)?;
+    let max_age = calculate_token_expiry(token.expires_in());
 
-    let refresh_token = token.refresh_token().ok_or(ApiError::OptionError)?;
+    let refresh_token = token
+        .refresh_token()
+        .ok_or(AppError::Validation(String::from("Token not found")))?;
 
     update_user_session(
         &db,
@@ -115,25 +112,26 @@ pub async fn google_callback(
     Ok(Redirect::to(redirect_str.as_str()))
 }
 
-async fn fetch_user_profile(access_token: &str) -> Result<UserProfile, ApiError> {
+async fn fetch_user_profile(access_token: &str) -> Result<UserProfile, AppError> {
     let req = Client::new();
     req.get("https://openidconnect.googleapis.com/v1/userinfo")
         .bearer_auth(access_token)
         .send()
         .await
-        .map_err(|_| ApiError::OptionError)?
+        .map_err(|e| AppError::Unexpected(e.into()))?
         .json::<UserProfile>()
         .await
-        .map_err(|_| ApiError::OptionError)
+        .map_err(|e| AppError::Unexpected(e.into()))
 }
 
-fn calculate_token_expiry(
-    expires_in: Option<std::time::Duration>,
-) -> Option<chrono::NaiveDateTime> {
-    expires_in.and_then(|secs| {
-        let duration = Duration::seconds(secs.as_secs().try_into().ok()?);
-        Some(Local::now().naive_local() + duration)
-    })
+fn calculate_token_expiry(expires_in: Option<std::time::Duration>) -> chrono::NaiveDateTime {
+    match expires_in {
+        Some(secs) => {
+            let duration = Duration::seconds(secs.as_secs().try_into().unwrap_or(0));
+            Local::now().naive_local() + duration
+        }
+        None => Local::now().naive_local(),
+    }
 }
 
 async fn update_user_session(
@@ -142,12 +140,12 @@ async fn update_user_session(
     access_token: &str,
     expires_at: chrono::NaiveDateTime,
     refresh_token: &str,
-) -> Result<(), ApiError> {
+) -> Result<(), AppError> {
     sqlx::query("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1)")
         .bind(email)
         .execute(db)
         .await
-        .map_err(|_| ApiError::OptionError)?;
+        .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
     let result: PgQueryResult = sqlx::query(
         "INSERT INTO sessions (user_id, session_id, expires_at, refresh_token)
@@ -165,11 +163,11 @@ async fn update_user_session(
     .bind(refresh_token)
     .execute(db)
     .await
-    .map_err(|_| ApiError::OptionError)?;
+    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
     // Check how many rows were affected
     if result.rows_affected() == 0 {
-        return Err(ApiError::OptionError); // No rows were affected, handle as needed
+        return Err(AppError::Database(anyhow::anyhow!("No rows were affected")));
     }
 
     Ok(())
@@ -179,7 +177,7 @@ pub async fn renew_token(
     db: PgPool,
     oauth_client: BasicClient,
     email: String,
-) -> Result<(), ApiError> {
+) -> Result<(), AppError> {
     let refresh_token = fetch_refresh_token(&db, &email).await?;
 
     let token = oauth_client
@@ -188,10 +186,10 @@ pub async fn renew_token(
         .await
         .map_err(|err| {
             tracing::error!("Request error: {:?}", err);
-            ApiError::OptionError
+            AppError::ExternalService(anyhow::anyhow!("Failed to exchange refresh token"))
         })?;
 
-    let max_age = calculate_token_expiry(token.expires_in()).ok_or(ApiError::OptionError)?;
+    let max_age = calculate_token_expiry(token.expires_in());
 
     update_user_session(
         &db,
@@ -205,12 +203,12 @@ pub async fn renew_token(
     Ok(())
 }
 
-async fn fetch_refresh_token(db: &sqlx::PgPool, email: &str) -> Result<RefreshToken, ApiError> {
+async fn fetch_refresh_token(db: &sqlx::PgPool, email: &str) -> Result<RefreshToken, AppError> {
     let refresh_token: String = sqlx::query("SELECT refresh_token FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)")
       .bind(email)
       .fetch_one(db)
       .await
-      .map_err(|_| ApiError::OptionError)?
+      .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?
       .get("refresh_token");
 
     Ok(RefreshToken::new(refresh_token))
@@ -219,7 +217,7 @@ async fn fetch_refresh_token(db: &sqlx::PgPool, email: &str) -> Result<RefreshTo
 pub async fn check_google_session(
     State(inner): State<InnerState>,
     cookies: Cookies,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> {
     let InnerState { db, .. } = inner;
 
     let auth_token = cookies
@@ -228,29 +226,21 @@ pub async fn check_google_session(
         .unwrap_or_default();
 
     if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+        return Err(AppError::Validation(String::from("No auth token found")));
     }
 
     let email = get_email_from_token(auth_token).await;
 
-    let session = sqlx::query(
-        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1)",
-    )
-    .bind(email)
-    .execute(&db)
-    .await
-    .map_err(internal_error)?;
+    let session: PgQueryResult = sqlx::query("SELECT refresh_token FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)")
+        .bind(email.unwrap())
+        .execute(&db)
+        .await
+        .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
     tracing::debug!("session {:?}", session);
 
     if session.rows_affected() == 0 {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "Session not found" })).to_string(),
-        )); // No rows were affected, handle as needed
+        return Err(AppError::Validation(String::from("Session not found")));
     }
 
     return Ok(Json(json!({ "success": "true" })));

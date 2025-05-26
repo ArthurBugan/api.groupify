@@ -1,18 +1,16 @@
-use crate::utils::internal_error;
 use crate::InnerState;
+use crate::errors::AppError;
 
-use argon2::password_hash::Value;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::http::{HeaderMap, StatusCode}; // StatusCode might still be used for direct responses if any
+use axum::response::{Response};
 use axum::Json;
 use base64::engine::general_purpose;
 use base64::Engine;
 use rand::Rng;
-use serde_json::json;
-use sqlx::{FromRow, PgPool, Row};
-use std::sync::Arc;
+// serde_json::json might not be needed if AppError handles all JSON error responses
+use sqlx::{FromRow};
 use url::Url;
 
 const DEFAULT_CACHE_CONTROL_HEADER_VALUE: &str =
@@ -48,16 +46,14 @@ pub async fn redirect(
     State(inner): State<InnerState>,
     Path(requested_link): Path<String>,
     headers: HeaderMap,
-) -> Result<Response, (StatusCode, String)> {
+) -> Result<Response, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let link = sqlx::query_as::<_, Link>(r#" select id, target_url from links where id = $1"#)
         .bind(&requested_link)
         .fetch_optional(&db)
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| "Not Found".to_string())
-        .map_err(|err| (StatusCode::NOT_FOUND, err))?;
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Link '{}' not found", requested_link)))?;
 
     tracing::debug!(
         "Redirecting link id {} to {}",
@@ -67,53 +63,53 @@ pub async fn redirect(
 
     let referer_header = headers
         .get("referer")
-        .map(|value| value.to_str().unwrap_or_default().to_string());
+        .and_then(|value| value.to_str().ok())
+        .map(String::from);
 
     let user_agent_header = headers
         .get("user-agent")
-        .map(|value| value.to_str().unwrap_or_default().to_string());
+        .and_then(|value| value.to_str().ok())
+        .map(String::from);
 
     let insert_statistics_timeout = tokio::time::Duration::from_millis(10000);
 
-    let saved_statistics = tokio::time::timeout(
+    tokio::time::timeout(
         insert_statistics_timeout,
-        sqlx::query_as::<_, CounterLinkStatistics>(
+        sqlx::query(
             r#"
                 insert into link_statistics(link_id, referer, user_agent)
                 values($1, $2, $3)
                 "#,
         )
-        .bind(requested_link)
+        .bind(&requested_link) // Ensure requested_link is owned or cloned if needed here
         .bind(referer_header)
         .bind(user_agent_header)
-        .fetch_one(&db),
+        .execute(&db),
     )
-    .await
-    .map_err(internal_error)?;
-
-    Ok(Response::builder()
+    .await??; // First ? for Timeout, second for sqlx::Error (both map to AppError)
+    
+    Response::builder()
         .status(StatusCode::TEMPORARY_REDIRECT)
         .header("Location", link.target_url)
         .header("Cache-Control", DEFAULT_CACHE_CONTROL_HEADER_VALUE)
         .body(Body::empty())
-        .expect("This response should always be constructable"))
+        .map_err(|e| AppError::Unexpected(anyhow::Error::new(e).context("Failed to build redirect response")))
 }
 
 pub async fn create_link(
     State(inner): State<InnerState>,
-    Json(new_link): Json<LinkTarget>,
-) -> Result<Json<Link>, (StatusCode, String)> {
+    Json(new_link_payload): Json<LinkTarget>,
+) -> Result<Json<Link>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
-    let url = Url::parse(&new_link.target_url)
-        .map_err(|_| (StatusCode::CONFLICT, "url malformed".into()))?
+    let url = Url::parse(&new_link_payload.target_url)? // Uses From<url::ParseError> for AppError
         .to_string();
 
     let new_link_id = generate_id();
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
+    let query_timeout = tokio::time::Duration::from_millis(10000);
 
     let new_link = tokio::time::timeout(
-        fetch_statistics_timeout,
+        query_timeout,
         sqlx::query_as::<_, Link>(
             r#"INSERT INTO links (id, target_url) VALUES ($1, $2) RETURNING id, target_url"#,
         )
@@ -121,9 +117,7 @@ pub async fn create_link(
         .bind(url)
         .fetch_one(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??;
 
     Ok(Json(new_link))
 }
@@ -131,18 +125,17 @@ pub async fn create_link(
 pub async fn update_link(
     State(inner): State<InnerState>,
     Path(link_id): Path<String>,
-    Json(update_link): Json<LinkTarget>,
-) -> Result<Json<Link>, (StatusCode, String)> {
+    Json(update_link_payload): Json<LinkTarget>,
+) -> Result<Json<Link>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
-    let url = Url::parse(&update_link.target_url)
-        .map_err(|_| (StatusCode::CONFLICT, "Url malformed".into()))?
+    let url = Url::parse(&update_link_payload.target_url)?
         .to_string();
 
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
+    let query_timeout = tokio::time::Duration::from_millis(10000);
 
     let link = tokio::time::timeout(
-        fetch_statistics_timeout,
+        query_timeout,
         sqlx::query_as::<_, Link>(
             r#"update links set target_url = $1 where id = $2 returning id, target_url"#,
         )
@@ -150,9 +143,7 @@ pub async fn update_link(
         .bind(link_id)
         .fetch_one(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??;
 
     Ok(Json(link))
 }
@@ -160,20 +151,18 @@ pub async fn update_link(
 pub async fn get_link_statistics(
     State(inner): State<InnerState>,
     Path(link_id): Path<String>,
-) -> Result<Json<Vec<CounterLinkStatistics>>, (StatusCode, String)> {
+) -> Result<Json<Vec<CounterLinkStatistics>>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
-    let fetch_statistics_timeout = tokio::time::Duration::from_millis(10000);
+    let query_timeout = tokio::time::Duration::from_millis(10000);
 
     let statistics = tokio::time::timeout(
-        fetch_statistics_timeout,
+        query_timeout,
         sqlx::query_as::<_, CounterLinkStatistics>(r#"select count(*) as amount, referer, user_agent from link_statistics group by link_id, referer, user_agent having link_id = $1"#)
             .bind(link_id)
             .fetch_all(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await??;
 
     Ok(Json(statistics))
 }

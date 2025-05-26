@@ -1,11 +1,9 @@
-use crate::utils::internal_error;
+use crate::errors::AppError;
 
-use anyhow::{Context, Result};
+use anyhow::{Result};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::Json;
 use chrono::NaiveDateTime;
-use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string_pretty, Value};
 use sqlx::FromRow;
@@ -14,8 +12,7 @@ use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::email::{EmailClient, SendEmailRequest};
-use crate::routes::{get_email_from_token, get_user_id_from_token, Channel, Claims};
+use crate::routes::{get_email_from_token, get_user_id_from_token, Channel};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +28,7 @@ pub struct Group {
 pub async fn all_groups(
     cookies: Cookies,
     State(inner): State<InnerState>,
-) -> Result<Json<Vec<Group>>, (StatusCode, String)> {
+) -> Result<Json<Vec<Group>>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
@@ -41,16 +38,13 @@ pub async fn all_groups(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len(),);
+    tracing::debug!("auth_token {}", auth_token.len());
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let email = get_email_from_token(auth_token).await;
+    let email = get_email_from_token(auth_token).await?;
 
     let groups = tokio::time::timeout(
         fetch_groups_timeout,
@@ -58,9 +52,7 @@ pub async fn all_groups(
             .bind(email)
             .fetch_all(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     Ok(Json(groups))
 }
@@ -69,7 +61,7 @@ pub async fn create_group(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Json(group): Json<Group>,
-) -> Result<Json<Group>, (StatusCode, String)> {
+) -> Result<Json<Group>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
@@ -81,14 +73,11 @@ pub async fn create_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?;
 
     tracing::debug!(
         "group id {} \
@@ -112,9 +101,7 @@ pub async fn create_group(
         .bind(user_id)
         .fetch_one(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     println!("Created {:?}", to_string_pretty(&groups));
     Ok(Json(groups))
@@ -125,7 +112,7 @@ pub async fn update_group(
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
     Json(group): Json<Group>,
-) -> Result<Json<Group>, (StatusCode, String)> {
+) -> Result<Json<Group>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
@@ -135,14 +122,11 @@ pub async fn update_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?;
 
     tracing::debug!(
         "group id {} \
@@ -160,15 +144,13 @@ pub async fn update_group(
         sqlx::query_as::<_, Group>(
             r#"UPDATE groups SET name = $2, icon = $3, updated_at = CURRENT_TIMESTAMP where id = $1 and user_id = $4 returning *"#,
         )
-            .bind(group_id)
-            .bind(group.name)
-            .bind(group.icon)
-            .bind(user_id)
-            .fetch_one(&db),
+        .bind(group_id)
+        .bind(group.name)
+        .bind(group.icon)
+        .bind(user_id)
+        .fetch_one(&db),
     )
-        .await
-        .map_err(internal_error)?
-        .map_err(internal_error)?;
+    .await??; // Replaced .map_err(internal_error)?.map_err(internal_error)? with ??
 
     println!("Created {:?}", to_string_pretty(&groups));
     Ok(Json(groups))
@@ -178,7 +160,7 @@ pub async fn delete_group(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, String)> {
+) -> Result<Json<Value>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 
     let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
@@ -188,14 +170,11 @@ pub async fn delete_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    if auth_token.clone().len() == 0 {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Missing token" })).to_string(),
-        ));
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
     }
 
-    let user_id = get_user_id_from_token(auth_token).await;
+    let user_id = get_user_id_from_token(auth_token).await?;
 
     tracing::debug!(
         "group id {} \
@@ -213,9 +192,7 @@ pub async fn delete_group(
         .bind(user_id.clone())
         .fetch_optional(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??;
 
     tokio::time::timeout(
         fetch_groups_timeout,
@@ -224,9 +201,7 @@ pub async fn delete_group(
             .bind(user_id)
             .fetch_optional(&db),
     )
-    .await
-    .map_err(internal_error)?
-    .map_err(internal_error)?;
+    .await??;
 
     Ok(Json(json!({ "success": "true" })))
 }
