@@ -2,13 +2,12 @@ mod auth;
 mod authentication;
 mod db;
 mod email;
-mod routes;
 mod errors;
+mod routes;
 
 use crate::email::EmailClient;
 
 use crate::db::init_db;
-
 use crate::routes::{
     all_channels, all_channels_by_group, all_groups, confirm, create_channel, create_group,
     create_link, delete_account, delete_group, empty_debug, fetch_youtube_channels, get_language,
@@ -31,16 +30,26 @@ use bytes::BytesMut;
 use hyper::Method;
 use oauth2::basic::BasicClient;
 use sqlx::PgPool;
+use tracing::error;
 use std::error::Error;
 use time::Duration;
 use tower_cookies::CookieManagerLayer;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
-use std::sync::{Arc, RwLock};
+use opentelemetry::global;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use opentelemetry_otlp::{WithExportConfig, OTEL_EXPORTER_OTLP_ENDPOINT};
+use opentelemetry_otlp::{LogExporter, MetricExporter, Protocol, SpanExporter};
+use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::{
+    logs::SdkLoggerProvider, metrics::SdkMeterProvider, trace::SdkTracerProvider,
+};
+use axum_tracing_opentelemetry::middleware::OtelInResponseLayer;
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::EnvFilter;
+
+use std::sync::{Arc, OnceLock, RwLock};
 
 struct AppState {
     inner: InnerState,
@@ -67,18 +76,49 @@ impl FromRef<AppState> for InnerState {
 
 pub type SharedState = Arc<RwLock<HeaderAppState>>;
 
+fn get_resource() -> Resource {
+        static RESOURCE: OnceLock<Resource> = OnceLock::new();
+        RESOURCE
+            .get_or_init(|| {
+                Resource::builder()
+                    .with_service_name("groupify")
+                    .build()
+            })
+            .clone()
+    }
+
+    fn init_logs() -> SdkLoggerProvider {
+        let exporter = LogExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpJson)
+            .with_endpoint("https://otlp.nr-data.net/v1/logs")
+            .build()
+            .expect("Failed to create log exporter");
+
+        SdkLoggerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(get_resource())
+            .build()
+    }
+
+    fn init_traces() -> SdkTracerProvider {
+        let exporter = SpanExporter::builder()
+            .with_http()
+            .with_protocol(Protocol::HttpJson) //can be changed to `Protocol::HttpJson` to export in JSON format
+            .with_endpoint("https://otlp.nr-data.net/v1/traces")
+            .build()
+            .expect("Failed to create trace exporter");
+
+        SdkTracerProvider::builder()
+            .with_batch_exporter(exporter)
+            .with_resource(get_resource())
+            .build()
+    }
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenv::dotenv().ok();
     let shared_state = Arc::new(RwLock::new(HeaderAppState::default()));
-
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "link_shortener=debug".into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
 
     let email_client = EmailClient::new(
         std::env::var("EMAIL_BASE_URL")?,
@@ -113,6 +153,39 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "https://www.youtube.com".parse().unwrap(),
         "https://youtube.com".parse().unwrap(),
     ];
+
+    let logger_provider = init_logs();
+    let otel_layer = OpenTelemetryTracingBridge::new(&logger_provider);
+    let filter_otel = EnvFilter::new("info")
+        .add_directive("hyper=off".parse().unwrap())
+        .add_directive("tonic=off".parse().unwrap())
+        .add_directive("h2=off".parse().unwrap())
+        .add_directive("reqwest=off".parse().unwrap());
+    let otel_layer = otel_layer.with_filter(filter_otel);
+
+    let filter_fmt = EnvFilter::new("info").add_directive("opentelemetry=debug".parse().unwrap());
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_thread_names(true)
+        .with_filter(filter_fmt);
+
+    tracing_subscriber::registry()
+        .with(otel_layer)
+        .with(fmt_layer)
+        .init();
+
+    let tracer_provider = init_traces();
+    global::set_tracer_provider(tracer_provider.clone());
+
+     let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_protocol(Protocol::HttpBinary)
+        .with_endpoint("https://otlp.nr-data.net/v1/metrics")
+        .build()?;
+
+    let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        .build();
+    global::set_meter_provider(meter_provider.clone());
 
     let cors = CorsLayer::new()
         .allow_methods([
@@ -165,10 +238,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .route("/check-google-session", get(check_google_session))
         .route("/add-survey", post(insert_survey))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
         .layer(CookieManagerLayer::new())
         .layer(prometheus_layer)
         .layer(session)
+        .layer(OtelInResponseLayer)
         .layer(Extension(shared_state))
         .with_state(app_state);
 

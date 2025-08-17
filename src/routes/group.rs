@@ -38,7 +38,7 @@ pub async fn all_groups(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len());
+    tracing::info!("auth_token {}", auth_token.len());
 
     if auth_token.is_empty() {
         return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
