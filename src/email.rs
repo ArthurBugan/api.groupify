@@ -60,7 +60,7 @@ impl EmailClient {
 
         let curl_command = request_to_curl(&user_request);
 
-        tracing::debug!("user_request {}", curl_command.unwrap());
+        tracing::info!("user_request {}", curl_command.unwrap());
 
         self.http_client.execute(user_request).await?;
 
@@ -86,7 +86,7 @@ impl EmailClient {
 
         let curl_command = request_to_curl(&request);
 
-        tracing::debug!("curl_command {}", curl_command.unwrap());
+        tracing::info!("curl_command {}", curl_command.unwrap());
 
         let response = self.http_client.execute(request).await?;
 

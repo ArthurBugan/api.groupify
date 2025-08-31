@@ -58,7 +58,7 @@ pub async fn all_channels(
 
     let email = get_email_from_token(auth_token).await?; // Assuming get_email_from_token returns Result<_, AppError>
 
-    tracing::debug!("email {}", email);
+    tracing::info!("email {}", email);
 
     let channels = tokio::time::timeout(
         fetch_channels_timeout,
@@ -86,7 +86,7 @@ pub async fn all_channels_by_group(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len());
+    tracing::info!("auth_token {}", auth_token.len());
 
     if auth_token.is_empty() {
         return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
@@ -94,7 +94,7 @@ pub async fn all_channels_by_group(
 
     let email = get_email_from_token(auth_token).await?; // Assuming get_email_from_token returns Result<_, AppError>
 
-    tracing::debug!(
+    tracing::info!(
         "group id {}\
         email {}",
         group_id,
@@ -125,7 +125,7 @@ pub async fn fetch_youtube_channels(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len());
+    tracing::info!("auth_token {}", auth_token.len());
 
     if auth_token.is_empty() {
         return Err(AppError::Authentication(anyhow::anyhow!("Missing token"))); // Use AppError
@@ -157,7 +157,7 @@ pub async fn create_channel(
 
     let uuid = Uuid::new_v4().to_string();
 
-    tracing::debug!(
+    tracing::info!(
         "channel id {} \
          channel name {}\
          channel user id {}\

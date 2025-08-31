@@ -25,6 +25,7 @@ pub struct Group {
     pub user_id: String,
 }
 
+#[tracing::instrument]
 pub async fn all_groups(
     cookies: Cookies,
     State(inner): State<InnerState>,
@@ -79,7 +80,7 @@ pub async fn create_group(
 
     let user_id = get_user_id_from_token(auth_token).await?;
 
-    tracing::debug!(
+    tracing::info!(
         "group id {} \
          group created_at {} \
          group name {}\
@@ -128,7 +129,7 @@ pub async fn update_group(
 
     let user_id = get_user_id_from_token(auth_token).await?;
 
-    tracing::debug!(
+    tracing::info!(
         "group id {} \
          group name {}\
          user id {}\
@@ -176,7 +177,7 @@ pub async fn delete_group(
 
     let user_id = get_user_id_from_token(auth_token).await?;
 
-    tracing::debug!(
+    tracing::info!(
         "group id {} \
          user id {}",
         group_id,

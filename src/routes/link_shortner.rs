@@ -55,7 +55,7 @@ pub async fn redirect(
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Link '{}' not found", requested_link)))?;
 
-    tracing::debug!(
+    tracing::info!(
         "Redirecting link id {} to {}",
         requested_link,
         link.target_url

@@ -68,7 +68,7 @@ pub async fn create_user(
 ) -> Result<String, AppError> { // Changed return type
     let uuid = Uuid::new_v4().to_string();
 
-    tracing::debug!(
+    tracing::info!(
         "user id {} \
          user email {}\
          user password {:?}",
