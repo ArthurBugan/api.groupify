@@ -237,7 +237,7 @@ pub async fn check_google_session(
         .await
         .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
 
-    tracing::debug!("session {:?}", session);
+    tracing::info!("session {:?}", session);
 
     if session.rows_affected() == 0 {
         return Err(AppError::Validation(String::from("Session not found")));

@@ -28,7 +28,7 @@ pub async fn insert_survey(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    tracing::debug!("auth_token {}", auth_token.len(),);
+    tracing::info!("auth_token {}", auth_token.len(),);
 
     if auth_token.clone().len() == 0 {
         return Err(AppError::Validation(String::from("No auth token found")));

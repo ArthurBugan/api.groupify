@@ -58,7 +58,7 @@ pub async fn validate_credentials(
         }
         Err(error) => {
             // If the Result is Err, error will contain the Error
-            tracing::debug!("Error: {:?}", error);
+            tracing::info!("Error: {:?}", error);
         }
     }
 
