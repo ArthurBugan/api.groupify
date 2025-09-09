@@ -156,6 +156,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let origins = [
         "https://localhost".parse().unwrap(),
+        "https://localhost/".parse().unwrap(),
+        "http://localhost".parse().unwrap(),
         "http://localhost:3000".parse().unwrap(),
         "https://localhost:3000".parse().unwrap(),
         "https://groupify.dev".parse().unwrap(),
@@ -230,7 +232,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )
                 .layer(PropagateRequestIdLayer::x_request_id()),
         )
-        .layer(ServiceBuilder::new().layer(NewSentryLayer::<Request<Body>>::new_from_top()))
         .layer(Extension(shared_state))
         .with_state(app_state);
 
