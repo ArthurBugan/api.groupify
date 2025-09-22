@@ -20,8 +20,8 @@ use crate::auth::{build_oauth_client, check_google_session, google_callback};
 
 use crate::authentication::{change_password, forget_password};
 
-use axum::body::Body;
-use axum::extract::{FromRef, Request};
+use anyhow::Result;
+use axum::extract::FromRef;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::HeaderMap;
 use axum::routing::{delete, get, patch, post, put};
@@ -30,32 +30,26 @@ use axum_prometheus::PrometheusMetricLayer;
 use bytes::BytesMut;
 use hyper::Method;
 use oauth2::basic::BasicClient;
-use opentelemetry::global;
-use sentry::integrations::tracing::EventFilter;
 use sqlx::PgPool;
 use std::error::Error;
 use time::Duration;
+use tower::ServiceBuilder;
 use tower_cookies::CookieManagerLayer;
 use tower_http::cors::CorsLayer;
 use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
-use tracing_otel_extra::logs::init_env_filter;
-use tracing_otel_extra::opentelemetry::KeyValue;
-use tracing_otel_extra::{
-    get_resource, init_meter_provider, init_tracer_provider, init_tracing_subscriber,
-};
-use tracing_subscriber::layer::SubscriberExt;
-
-use tower_http::trace::TraceLayer;
-
-use anyhow::Result;
-use axum_otel::{AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator, Level};
-use tower::ServiceBuilder;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-
-use sentry::integrations::opentelemetry as sentry_opentelemetry;
-use sentry::integrations::tower::NewSentryLayer;
 
 use std::sync::{Arc, RwLock};
+use tower_http::trace::TraceLayer;
+use tracing::Level;
+
+use axum_otel::{AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tracing_otel_extra::{
+    get_resource, init_env_filter, init_meter_provider, init_tracer_provider,
+    init_tracing_subscriber, LogFormat, Logger,
+};
+
+use opentelemetry::KeyValue;
 
 struct AppState {
     inner: InnerState,
@@ -85,47 +79,20 @@ pub type SharedState = Arc<RwLock<HeaderAppState>>;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     dotenvy::dotenv().ok();
-    let service_name = "groupify";
+    let service_name = "api-groupify";
     let resource = get_resource(service_name, &[KeyValue::new("environment", "production")]);
-    let sentry_dns = std::env::var("SENTRY_DSN")?;
 
     let tracer_provider = init_tracer_provider(&resource, 1.0)?;
     let meter_provider = init_meter_provider(&resource, 30)?;
     let env_filter = init_env_filter(&Level::DEBUG);
 
-    let sentry_layer =
-    sentry::integrations::tracing::layer().event_filter(|md| match *md.level() {
-        // Capture error level events as Sentry events
-        // These are grouped into issues, representing high-severity errors to act upon
-        tracing::Level::ERROR => EventFilter::Event,
-        // Ignore trace level events, as they're too verbose
-        tracing::Level::TRACE => EventFilter::Ignore,
-        // Capture everything else as a traditional structured log
-        _ => EventFilter::Log,
-    });
-
     let _guard = init_tracing_subscriber(
         service_name,
         env_filter,
-        vec![Box::new(tracing_subscriber::fmt::layer()), Box::new(sentry_layer)],
+        vec![Box::new(tracing_subscriber::fmt::layer())],
         tracer_provider,
         meter_provider,
     )?;
-
-    let _guard = sentry::init((
-        sentry_dns,
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            enable_logs: true,
-            traces_sample_rate: 1.0,
-            // Capture user IPs and potentially sensitive headers when using HTTP server integrations
-            // see https://docs.sentry.io/platforms/rust/data-management/data-collected for more info
-            send_default_pii: true,
-            ..Default::default()
-        },
-    ));
-
-    global::set_text_map_propagator(sentry_opentelemetry::SentryPropagator::new());
 
     let shared_state = Arc::new(RwLock::new(HeaderAppState::default()));
 
@@ -219,16 +186,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(CookieManagerLayer::new())
         .layer(prometheus_layer)
         .layer(session)
-        .layer(sentry_tower::NewSentryLayer::<Request>::new_from_top())
-        .layer(sentry_tower::SentryHttpLayer::new().enable_transaction())
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
                 .layer(
                     TraceLayer::new_for_http()
-                        .make_span_with(AxumOtelSpanCreator::new().level(Level::DEBUG))
-                        .on_response(AxumOtelOnResponse::new().level(Level::DEBUG))
-                        .on_failure(AxumOtelOnFailure::new()),
+                        .make_span_with(AxumOtelSpanCreator::new().level(Level::INFO))
+                        .on_response(AxumOtelOnResponse::new().level(Level::INFO))
+                        .on_failure(AxumOtelOnFailure::new().level(Level::ERROR)),
                 )
                 .layer(PropagateRequestIdLayer::x_request_id()),
         )
