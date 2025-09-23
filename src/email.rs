@@ -2,6 +2,7 @@ use reqwest::{Client, Request};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use std::collections::HashMap;
+use tracing::{info, error};
 
 #[derive(Clone, Debug)]
 pub struct EmailClient {
@@ -34,6 +35,14 @@ impl EmailClient {
         }
     }
 
+    #[tracing::instrument(
+    name = "send_email",
+    skip(self, params),
+    fields(
+        recipient = %recipient,
+        template_id = template_id
+    )
+)]
     pub async fn send_email(
         &self,
         recipient: &str,
@@ -43,80 +52,98 @@ impl EmailClient {
         let url = format!("{}/v3/smtp/email", self.base_url);
         let user_url = format!("{}/v3/contacts", self.base_url);
 
-        // contact request
+        // Contact request
         let request_body = CreateContactRequest {
             list_ids: vec![2],
             email: recipient.to_string(),
         };
 
-        let user_request = self
+        let user_request = match self
             .http_client
             .post(&user_url)
             .header("api-key", self.authorization_token.to_owned())
-            .header("Accept", "application/json".to_owned())
-            .header("Content-Type", "application/json".to_owned())
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
             .json(&request_body)
-            .build()?;
+            .build()
+        {
+            Ok(req) => req,
+            Err(err) => {
+                error!("Failed to build contact request: {:?}", err);
+                return Err(err);
+            }
+        };
 
-        let curl_command = request_to_curl(&user_request);
+        if let Ok(curl_command) = request_to_curl(&user_request) {
+            info!("user_request CURL: {}", curl_command);
+        }
 
-        tracing::info!("user_request {}", curl_command.unwrap());
+        if let Err(err) = self.http_client.execute(user_request).await {
+            error!("Failed to send contact request: {:?}", err);
+            return Err(err);
+        }
 
-        self.http_client.execute(user_request).await?;
-
-        // email request
+        // Email request
         let mut to = HashMap::new();
         to.insert("name".to_owned(), "No name".to_owned());
         to.insert("email".to_owned(), recipient.to_owned());
 
         let request_body = SendEmailRequest {
             to: vec![to],
-            template_id: template_id,
+            template_id,
             params,
         };
 
-        let request = self
+        let email_request = match self
             .http_client
             .post(&url)
             .header("api-key", self.authorization_token.to_owned())
-            .header("Accept", "application/json".to_owned())
-            .header("Content-Type", "application/json".to_owned())
+            .header("Accept", "application/json")
+            .header("Content-Type", "application/json")
             .json(&request_body)
-            .build()?;
+            .build()
+        {
+            Ok(req) => req,
+            Err(err) => {
+                error!("Failed to build email request: {:?}", err);
+                return Err(err);
+            }
+        };
 
-        let curl_command = request_to_curl(&request);
+        if let Ok(curl_command) = request_to_curl(&email_request) {
+            info!("email_request CURL: {}", curl_command);
+        }
 
-        tracing::info!("curl_command {}", curl_command.unwrap());
-
-        let response = self.http_client.execute(request).await?;
-
-        Ok(response)
+        match self.http_client.execute(email_request).await {
+            Ok(response) => Ok(response),
+            Err(err) => {
+                error!("Failed to send email: {:?}", err);
+                Err(err)
+            }
+        }
     }
 }
 
 fn request_to_curl(request: &Request) -> Result<String, reqwest::Error> {
-    let command = format!("curl -X {} '{}'", request.method(), request.url());
+    let mut command = format!("curl -X {} '{}'", request.method(), request.url());
 
-    // Add headers to the curl command
-    let mut command = request
-        .headers()
-        .iter()
-        .fold(command, |cmd, (name, value)| {
-            format!(
-                "{} -H '{}: {}'",
-                cmd,
-                name.as_str(),
-                value.to_str().unwrap()
-            )
-        });
+    for (name, value) in request.headers().iter() {
+        if let Ok(val_str) = value.to_str() {
+            command.push_str(&format!(" -H '{}: {}'", name.as_str(), val_str));
+        } else {
+            command.push_str(&format!(" -H '{}: <binary>'", name.as_str()));
+        }
+    }
 
-    // Add request body to the curl command
     if let Some(body) = request.body() {
-        if let Some(Ok(body_str)) = body
-            .as_bytes()
-            .and_then(|bytes| Some(String::from_utf8(bytes.to_vec())))
-        {
-            command.push_str(&format!(" -d '{}'", body_str));
+        if let Some(bytes) = body.as_bytes() {
+            if let Ok(body_str) = std::str::from_utf8(bytes) {
+                command.push_str(&format!(" -d '{}'", body_str));
+            } else {
+                command.push_str(" -d '<non-utf8 body>'");
+            }
+        } else {
+            command.push_str(" -d '<streaming body not shown>'");
         }
     }
 
