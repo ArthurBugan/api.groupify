@@ -37,7 +37,7 @@ pub struct FormData {
 pub async fn login_user(
     cookies: Cookies,
     State(inner): State<InnerState>,
-    form: Json<FormData>,
+    form: TypedMultipart<FormData>,
 ) -> Result<Json<Value>, AppError> { // Changed return type
     let InnerState { db, .. } = inner;
 

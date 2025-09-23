@@ -71,7 +71,6 @@ pub async fn send_confirmation_email(
     let resp = email_client
         .send_email(&user.email, template_model, template_id)
         .await?;
-        // Assuming email_client.send_email now returns Result<_, AppError> or its error can be converted via ?
 
     Ok(resp)
 }
