@@ -191,8 +191,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
                 .layer(
                     TraceLayer::new_for_http()
-                        .make_span_with(AxumOtelSpanCreator::new().level(Level::INFO))
-                        .on_response(AxumOtelOnResponse::new().level(Level::INFO))
+                        .make_span_with(AxumOtelSpanCreator::new().level(Level::DEBUG))
+                        .on_response(AxumOtelOnResponse::new().level(Level::DEBUG))
                         .on_failure(AxumOtelOnFailure::new().level(Level::ERROR)),
                 )
                 .layer(PropagateRequestIdLayer::x_request_id()),

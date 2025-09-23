@@ -61,32 +61,74 @@ impl HeaderValueExt for HeaderValue {
     }
 }
 
-#[tracing::instrument(name = "Saving new user in the database", skip(user, transaction))]
+#[tracing::instrument(name = "Saving new user in the database", skip(user, transaction), err)]
 pub async fn create_user(
     transaction: &mut Transaction<'_, Postgres>,
     user: User,
-) -> Result<String, AppError> { // Changed return type
+) -> Result<String, AppError> {
     let uuid = Uuid::new_v4().to_string();
 
     tracing::info!(
-        "user id {} \
-         user email {}\
-         user password {:?}",
+        "Attempting to create user with id {} and email {}",
         uuid,
-        user.email,
-        user.encrypted_password
+        user.email
     );
+
+    // First, check if user already exists
+    let existing_user_check = sqlx::query_as::<_, User>(r#"SELECT * FROM users WHERE email = $1"#)
+    .bind(&user.email)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to check for existing user: {}", e);
+        AppError::Database(anyhow::Error::from(e).context("Failed to check for existing user"))
+    })?;
+
+    if existing_user_check.is_some() {
+        tracing::warn!("Attempted to create user with existing email: {}", user.email);
+        return Err(AppError::Conflict(format!("User with email '{}' already exists", user.email)));
+    }
 
     let password_hash = compute_password_hash(user.encrypted_password.unwrap()).await?;
 
-    let query = sqlx::query_as::<_, User>(
-        r#"INSERT INTO users (id, email, encrypted_password) values($1, $2, $3) returning *"#,
-    )
-    .bind(&uuid)
-    .bind(user.email)
-    .bind(password_hash);
+    let query = sqlx::query!(
+        r#"INSERT INTO users (id, email, encrypted_password) VALUES ($1, $2, $3)"#,
+        uuid,
+        user.email,
+        password_hash
+    );
 
-    transaction.execute(query).await.map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to create user")))?;
+    transaction.execute(query).await.map_err(|e| {
+        tracing::error!("Failed to insert user into database: {}", e);
+        
+        // Handle specific database constraint violations
+        match &e {
+            sqlx::Error::Database(db_err) => {
+                if let Some(constraint) = db_err.constraint() {
+                    match constraint {
+                        "users_email_key" | "users_email_unique" => {
+                            return AppError::Conflict(format!("User with email '{}' already exists", user.email));
+                        }
+                        _ => {
+                            tracing::error!("Database constraint violation: {}", constraint);
+                        }
+                    }
+                }
+                
+                // Check for duplicate key error codes (PostgreSQL specific)
+                if let Some(code) = db_err.code() {
+                    if code == "23505" { // unique_violation
+                        return AppError::Conflict(format!("User with email '{}' already exists", user.email));
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        AppError::Database(anyhow::Error::from(e).context("Failed to create user"))
+    })?;
+
+    tracing::info!("Successfully created user with id: {}", uuid);
     Ok(uuid)
 }
 

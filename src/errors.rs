@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Validation error: {0}")]
     Validation(String),
 
+    #[error("Conflict error: {0}")]
+    Conflict(String),
+
     #[error("External service error: {0}")]
     ExternalService(#[source] anyhow::Error),
 
@@ -55,6 +58,8 @@ impl IntoResponse for AppError {
                 format!("External service error: {}", e),
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            // Add this new case
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::UrlParse(e) => (StatusCode::BAD_REQUEST, format!("Invalid URL: {}", e)),
             AppError::Timeout(e) => (
                 StatusCode::GATEWAY_TIMEOUT,
@@ -64,7 +69,6 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("An unexpected error occurred: {}", e),
             ),
-            
         };
 
         // Log the error with its specific variant and message
@@ -106,7 +110,52 @@ impl From<sqlx::Error> for AppError {
 // Example for reqwest::Error, if you make HTTP calls
 impl From<reqwest::Error> for AppError {
     fn from(err: reqwest::Error) -> Self {
-        AppError::ExternalService(anyhow::Error::new(err).context("External HTTP request failed"))
+        let mut context_parts = Vec::new();
+        
+        // Add URL context
+        if let Some(url) = err.url() {
+            context_parts.push(format!("URL: {}", url));
+        }
+        
+        // Add status code context
+        if let Some(status) = err.status() {
+            context_parts.push(format!("HTTP {}: {}", 
+                status.as_u16(), 
+                status.canonical_reason().unwrap_or("Unknown Status")
+            ));
+        }
+        
+        // Add detailed error type
+        let error_type = match &err {
+            e if e.is_timeout() => "Request Timeout",
+            e if e.is_connect() => "Connection Failed",
+            e if e.is_decode() => "Response Decode Failed", 
+            e if e.is_redirect() => "Redirect Loop or Invalid Redirect",
+            e if e.is_request() => "Invalid Request",
+            e if e.is_body() => "Request Body Error",
+            _ => "Unknown HTTP Error"
+        };
+        context_parts.push(format!("Type: {}", error_type));
+        
+        // Build comprehensive context message
+        let context = if context_parts.is_empty() {
+            "External HTTP request failed".to_string()
+        } else {
+            format!("External HTTP request failed - {}", context_parts.join(", "))
+        };
+        
+        // Log the error with full context for debugging
+        tracing::error!(
+            error = %err,
+            url = ?err.url(),
+            status = ?err.status(),
+            is_timeout = err.is_timeout(),
+            is_connect = err.is_connect(),
+            is_decode = err.is_decode(),
+            "HTTP request failed with detailed context"
+        );
+        
+        AppError::ExternalService(anyhow::Error::new(err).context(context))
     }
 }
 
