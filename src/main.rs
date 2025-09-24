@@ -46,7 +46,7 @@ use axum_otel::{AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing_otel_extra::{
     get_resource, init_env_filter, init_meter_provider, init_tracer_provider,
-    init_tracing_subscriber, LogFormat, Logger,
+    init_tracing_subscriber
 };
 
 use opentelemetry::KeyValue;
@@ -75,6 +75,124 @@ impl FromRef<AppState> for InnerState {
 }
 
 pub type SharedState = Arc<RwLock<HeaderAppState>>;
+
+fn make_custom_span<B>(request: &axum::http::Request<B>) -> tracing::Span {
+    let request_id = request
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
+
+    tracing::info_span!(
+        "http_request",
+        method = %request.method(),
+        uri = %request.uri().path(),
+        query = ?request.uri().query(),
+        version = ?request.version(),
+        request_id = request_id,
+        user_agent = ?request.headers().get("user-agent"),
+        content_type = ?request.headers().get("content-type"),
+        content_length = ?request.headers().get("content-length"),
+    )
+}
+
+fn on_custom_request<B>(request: &axum::http::Request<B>, _span: &tracing::Span) {
+    let headers: std::collections::HashMap<String, String> = request
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            // Filter sensitive headers
+            if name.as_str().to_lowercase().contains("authorization")
+                || name.as_str().to_lowercase().contains("cookie")
+                || name.as_str().to_lowercase().contains("token")
+            {
+                Some((name.to_string(), "[REDACTED]".to_string()))
+            } else {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.to_string(), v.to_string()))
+            }
+        })
+        .collect();
+
+    tracing::info!(
+        method = %request.method(),
+        uri = %request.uri(),
+        headers = ?headers,
+        "Incoming HTTP request"
+    );
+}
+
+fn on_custom_response<B>(
+    response: &axum::http::Response<B>,
+    latency: std::time::Duration,
+    _span: &tracing::Span,
+) {
+    let status = response.status();
+    let latency_ms = latency.as_millis();
+
+    let log_level = match status.as_u16() {
+        200..=299 => tracing::Level::INFO,
+        300..=399 => tracing::Level::INFO,
+        400..=499 => tracing::Level::WARN,
+        500..=599 => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    };
+
+    let headers: std::collections::HashMap<String, String> = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect();
+
+    match log_level {
+        tracing::Level::INFO => tracing::info!(
+            status = %status,
+            latency_ms = latency_ms,
+            headers = ?headers,
+            "HTTP request completed successfully"
+        ),
+        tracing::Level::WARN => tracing::warn!(
+            status = %status,
+            latency_ms = latency_ms,
+            headers = ?headers,
+            "HTTP request completed with client error"
+        ),
+        tracing::Level::ERROR => tracing::error!(
+            status = %status,
+            latency_ms = latency_ms,
+            headers = ?headers,
+            "HTTP request completed with server error"
+        ),
+        _ => {}
+    }
+}
+
+fn on_custom_failure(
+    error: tower_http::classify::ServerErrorsFailureClass,
+    latency: std::time::Duration,
+    _span: &tracing::Span,
+) {
+    tracing::error!(
+        error = ?error,
+        latency_ms = latency.as_millis(),
+        error_type = match error {
+            tower_http::classify::ServerErrorsFailureClass::StatusCode(code) => {
+                format!("HTTP {}", code.as_u16())
+            }
+            tower_http::classify::ServerErrorsFailureClass::Error(_) => {
+                "Internal Error".to_string()
+            }
+        },
+        "HTTP request failed"
+    );
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -187,6 +305,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(CookieManagerLayer::new())
         .layer(prometheus_layer)
         .layer(session)
+        .layer(
+            ServiceBuilder::new()
+                .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
+                .layer(
+                    TraceLayer::new_for_http()
+                        .make_span_with(make_custom_span)
+                        .on_request(on_custom_request)
+                        .on_response(on_custom_response)
+                        .on_failure(on_custom_failure),
+                )
+                .layer(PropagateRequestIdLayer::x_request_id()),
+        )
         .layer(
             ServiceBuilder::new()
                 .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))

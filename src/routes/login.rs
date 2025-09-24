@@ -34,11 +34,13 @@ pub struct FormData {
     password: String,
 }
 
+#[tracing::instrument(name = "User login", skip(cookies, inner, form), fields(email = %form.email))]
 pub async fn login_user(
     cookies: Cookies,
     State(inner): State<InnerState>,
     form: Json<FormData>,
-) -> Result<Json<Value>, AppError> { // Changed return type
+) -> Result<Json<Value>, AppError> {
+    tracing::info!("Starting login process for user: {}", form.email);
     let InnerState { db, .. } = inner;
 
     let credentials = Credentials {
@@ -46,20 +48,37 @@ pub async fn login_user(
         password: form.password.clone(),
     };
 
+    tracing::debug!("Validating user credentials");
     let user_id = validate_credentials(&credentials, &db)
         .await
         .map_err(|auth_error| match auth_error {
-            AuthError::InvalidCredentials(e) => AppError::Authentication(e.context("Invalid credentials supplied")),
-            AuthError::UnexpectedError(e) => AppError::Unexpected(e.context("Credential validation failed")),
+            AuthError::InvalidCredentials(e) => {
+                tracing::warn!("Invalid credentials provided for user: {}", form.email);
+                AppError::Authentication(e.context("Invalid credentials supplied"))
+            },
+            AuthError::UnexpectedError(e) => {
+                tracing::error!("Unexpected error during credential validation for user {}: {:?}", form.email, e);
+                AppError::Unexpected(e.context("Credential validation failed"))
+            },
         })?;
 
+    tracing::info!("Credentials validated successfully for user: {}", form.email);
+
+    tracing::debug!("Generating JWT token for user: {}", form.email);
     let token = generate_token(&credentials.email, &user_id)?;
+    tracing::debug!("JWT token generated successfully");
 
     let mut now = OffsetDateTime::now_utc();
     now += Duration::days(60);
 
+    tracing::debug!("Retrieving GROUPIFY_HOST environment variable");
     let domain = std::env::var("GROUPIFY_HOST")
-        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set")))?;
+        .map_err(|e| {
+            tracing::error!("GROUPIFY_HOST environment variable not set: {:?}", e);
+            AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
+        })?;
+
+    tracing::debug!("Setting up authentication cookie for domain: {}", domain);
     let mut cookie = Cookie::new("auth-token", token);
 
     cookie.set_domain(domain);
@@ -69,33 +88,57 @@ pub async fn login_user(
     cookie.set_expires(now);
     cookies.add(cookie);
 
+    tracing::info!("Login completed successfully for user: {}", form.email);
     Ok(Json(json!({ "data": "login completed" })))
 }
 
-pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> { // Changed return type
+#[tracing::instrument(name = "User logout", skip(cookies))]
+pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
+    tracing::info!("Starting logout process");
+    
+    tracing::debug!("Creating removal cookie for auth-token");
     let mut cookie = Cookie::named("auth-token");
     cookie.set_same_site(SameSite::None);
     cookie.make_removal();
 
     cookies.remove(cookie);
+    tracing::info!("Logout completed successfully");
     Ok(Json(json!({ "data": "logout completed" })))
 }
 
-pub async fn root(headers: HeaderMap) -> Html<String> { // Keep Html if it's the correct response type
+#[tracing::instrument(name = "Root endpoint", skip(headers))]
+pub async fn root(headers: HeaderMap) -> Html<String> {
+    tracing::debug!("Processing root endpoint request with {} headers", headers.len());
     Html(format!("<h1>{:?}</h1>", headers))
 }
 
-fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> { // Changed return type
+#[tracing::instrument(name = "Generate JWT token", skip(username, user_id), fields(username = %username, user_id = %user_id))]
+fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> {
+    tracing::debug!("Starting JWT token generation for user: {}", username);
+    
+    tracing::debug!("Retrieving SECRET_TOKEN environment variable");
     let key = std::env::var("SECRET_TOKEN")
-        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set")))?;
+        .map_err(|e| {
+            tracing::error!("SECRET_TOKEN environment variable not set: {:?}", e);
+            AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set"))
+        })?;
 
+    tracing::debug!("Creating JWT claims for user: {}", username);
     let claims = Claims {
         user_id: user_id.to_owned(),
         sub: username.to_owned(),
-        role: "user".to_owned(), // Consider making this dynamic if roles are planned
+        role: "user".to_owned(),
         exp: (chrono::Utc::now() + chrono::Duration::days(90)).timestamp() as usize,
     };
+    
+    tracing::debug!("Encoding JWT token");
     let header = Header::new(Algorithm::HS256);
-    encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes()))
-        .map_err(|e| AppError::Unexpected(anyhow::Error::new(e).context("Failed to encode JWT token")))
+    let token = encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes()))
+        .map_err(|e| {
+            tracing::error!("Failed to encode JWT token for user {}: {:?}", username, e);
+            AppError::Unexpected(anyhow::Error::new(e).context("Failed to encode JWT token"))
+        })?;
+
+    tracing::debug!("JWT token generated successfully for user: {}", username);
+    Ok(token)
 }
