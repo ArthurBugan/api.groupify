@@ -31,7 +31,7 @@ pub fn build_oauth_client(client_id: String, client_secret: String) -> BasicClie
     tracing::info!("Building OAuth client for Google authentication");
     tracing::debug!("Setting up OAuth client with redirect URL");
     
-    let redirect_url = "https://api.groupify.dev/auth/google_callback";
+    let redirect_url = "https://coolify.groupify.dev/api/auth/google_callback";
     //let redirect_url = "http://localhost:3001/auth/google_callback";
 
     tracing::debug!("Using redirect URL: {}", redirect_url);
