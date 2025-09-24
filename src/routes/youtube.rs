@@ -79,120 +79,155 @@ pub struct PageInfo {
     pub results_per_page: i64,
 }
 
+#[tracing::instrument(name = "Sync channels from YouTube API", skip(cookies, inner))]
 pub async fn sync_channels_from_youtube(
     cookies: Cookies,
     State(inner): State<InnerState>,
 ) -> Result<Json<Value>, AppError> {
+    tracing::info!("Starting YouTube channel synchronization");
     let InnerState {
         db,
-        oauth_client, // Borrow oauth_client here
+        oauth_client,
         ..
-    } = &inner; // Borrow inner to avoid moving
+    } = &inner;
 
-    // Extract the auth token from the cookies
+    tracing::debug!("Extracting auth token from cookies");
     let auth_token = cookies
         .get("auth-token")
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    // Get the email from the token (assuming get_email_from_token is implemented)
-    let email = get_email_from_token(auth_token).await?;
+    if auth_token.is_empty() {
+        tracing::warn!("No auth token found in cookies");
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing auth token")));
+    }
 
-    // Query to get the session id using the email
+    tracing::debug!("Getting email from auth token");
+    let email = get_email_from_token(auth_token).await?;
+    tracing::info!("Syncing YouTube channels for user: {}", email);
+
+    tracing::debug!("Querying session information from database");
     let bearer = sqlx::query(
         "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
     )
     .bind(email.clone())
     .fetch_one(&db.clone())
     .await
-    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
+    .map_err(|e| {
+        tracing::error!("Database error while fetching session for user {}: {:?}", email, e);
+        AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
+    })?;
 
     let expires_at: DateTime<Utc> = bearer.get("expires_at");
+    tracing::debug!("Session expires at: {}", expires_at);
 
-    // Renew token if it has expired
     if expires_at < Local::now() {
+        tracing::info!("Session expired, renewing token for user: {}", email);
         let _ = renew_token(db.clone(), oauth_client.clone(), email.clone()).await;
+        tracing::debug!("Token renewal completed");
     }
 
-    // Query to get the session id again after potentially renewing the token
+    tracing::debug!("Fetching updated session information");
     let bearer = sqlx::query(
         "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
     )
     .bind(&email)
     .fetch_one(db)
     .await
-    .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
+    .map_err(|e| {
+        tracing::error!("Database error while fetching updated session for user {}: {:?}", email, e);
+        AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
+    })?;
 
     let session_id: String = bearer.get("session_id");
+    tracing::debug!("Using session ID for YouTube API requests");
 
     let req = Client::new();
     let mut all_items = Vec::new();
     let mut next_page_token = None;
+    let mut page_count = 0;
 
-    // Loop through paginated results
+    tracing::info!("Starting paginated YouTube API requests");
     loop {
+        page_count += 1;
+        tracing::debug!("Processing page {} of YouTube subscriptions", page_count);
+        
         let mut url = format!(
           "https://www.googleapis.com/youtube/v3/subscriptions?mine=true&maxResults=50&part=snippet,contentDetails"
       );
 
-        // If there's a next_page_token, add it to the URL
         if let Some(token) = &next_page_token {
             url.push_str(&format!("&pageToken={}", token));
+            tracing::debug!("Using page token for pagination");
         }
 
-        // Send the request to YouTube API
+        tracing::debug!("Sending request to YouTube API: {}", url);
         let channels_req = req
             .get(&url)
-            .bearer_auth(&session_id) // Use the session ID as the bearer token
+            .bearer_auth(&session_id)
             .send()
             .await
-            .map_err(|e| AppError::Database(anyhow::Error::new(e).context("SQLx operation failed")))?;
+            .map_err(|e| {
+                tracing::error!("HTTP error while calling YouTube API: {:?}", e);
+                AppError::Database(anyhow::Error::new(e).context("YouTube API request failed"))
+            })?;
 
-
-        // Check the response status
         if !channels_req.status().is_success() {
             tracing::error!("YouTube API error: {:?}", channels_req.status());
             return Err(AppError::Validation(String::from("Could not get the channels list")));
         }
 
-        // Parse the YouTube API response into a CompleteYoutubeChannel struct
+        tracing::debug!("Parsing YouTube API response");
         let youtube_channel: CompleteYoutubeChannel = channels_req.json().await.map_err(|err| {
             tracing::error!("Failed to parse YouTube API response: {:?}", err);
             AppError::Validation(String::from("Could not parse the YouTube API response"))
         })?;
 
-        // Add the items to the results
+        let items_count = youtube_channel.items.len();
+        tracing::debug!("Received {} items from YouTube API on page {}", items_count, page_count);
         all_items.extend(youtube_channel.items);
 
-        // Check if there's a next page token
         if let Some(token) = youtube_channel.next_page_token {
             next_page_token = Some(token);
+            tracing::debug!("More pages available, continuing pagination");
         } else {
-            break; // No more pages, exit the loop
+            tracing::info!("Completed pagination, processed {} pages", page_count);
+            break;
         }
     }
 
-    // Map the all_items into a new Vec<SimplifiedChannel>
+    tracing::info!("Retrieved {} total YouTube subscriptions", all_items.len());
+
+    tracing::debug!("Converting YouTube API response to simplified channel format");
     let simplified_channels: Vec<YoutubeChannel> = all_items
         .into_iter()
-        .map(|item| YoutubeChannel {
-            id: Some(item.id.clone()),
-            name: item.snippet.title.clone(),
-            thumbnail: item.snippet.thumbnails.default.url.clone(),
-            channel_id: item.snippet.resource_id.channel_id.clone(),
-            created_at: Some(Local::now().naive_utc()),
-            updated_at: Some(Local::now().naive_utc()),
-            url: format!(
-                "{}{}",
-                "@".to_string(),
-                item.snippet.resource_id.channel_id.trim().to_string()
-            ),
-            new_content: item.content_details.new_item_count > 0,
+        .enumerate()
+        .map(|(index, item)| {
+            if index % 10 == 0 {
+                tracing::debug!("Processing channel {} of total", index + 1);
+            }
+            YoutubeChannel {
+                id: Some(item.id.clone()),
+                name: item.snippet.title.clone(),
+                thumbnail: item.snippet.thumbnails.default.url.clone(),
+                channel_id: item.snippet.resource_id.channel_id.clone(),
+                created_at: Some(Local::now().naive_utc()),
+                updated_at: Some(Local::now().naive_utc()),
+                url: format!(
+                    "{}{}",
+                    "@".to_string(),
+                    item.snippet.resource_id.channel_id.trim().to_string()
+                ),
+                new_content: item.content_details.new_item_count > 0,
+            }
         })
         .collect();
 
-    let _ = save_youtube_channels(cookies, State(inner.clone()), Json(simplified_channels)).await?;
+    tracing::info!("Converted {} channels to simplified format", simplified_channels.len());
 
-    // Return all collected items as JSON
-    return Ok(Json(json!({ "success": "true" })));
+    tracing::debug!("Saving YouTube channels to database");
+    let _ = save_youtube_channels(cookies, State(inner.clone()), Json(simplified_channels)).await?;
+    tracing::info!("YouTube channel synchronization completed successfully");
+
+    Ok(Json(json!({ "success": "true" })))
 }
