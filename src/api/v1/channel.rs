@@ -5,13 +5,13 @@ use axum::Json;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, to_string_pretty, Value};
-use sqlx::{Executor, FromRow, PgPool};
+use sqlx::{FromRow, PgPool};
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::routes::{get_email_from_token, get_user_id_from_token};
+use crate::api::v1::{get_email_from_token, get_user_id_from_token};
 
 #[derive(Serialize, Deserialize, FromRow, Debug)]
 #[serde(rename_all = "camelCase")]

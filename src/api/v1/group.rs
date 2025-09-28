@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::routes::{get_email_from_token, get_user_id_from_token, Channel};
+use crate::api::v1::{get_email_from_token, get_user_id_from_token, Channel};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]

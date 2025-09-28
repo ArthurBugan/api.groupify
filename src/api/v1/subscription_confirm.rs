@@ -1,4 +1,4 @@
-use crate::routes::{get_confirmation_token_from_user, User};
+use crate::api::v1::{get_confirmation_token_from_user, User};
 use crate::errors::AppError; // Added
 use crate::InnerState;
 use axum::extract::{Path, State};

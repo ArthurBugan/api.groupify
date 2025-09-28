@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use tower_cookies::Cookies;
 
 use crate::{
-    auth::renew_token, errors::AppError, routes::{get_email_from_token}, InnerState
+    auth::renew_token, errors::AppError, api::v1::{get_email_from_token}, InnerState
 };
 
 use serde::{Deserialize, Serialize};
