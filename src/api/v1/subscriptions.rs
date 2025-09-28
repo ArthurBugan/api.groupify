@@ -6,7 +6,7 @@ use rand::{thread_rng, Rng};
 use sqlx::{Executor, Postgres, Transaction};
 use std::collections::HashMap;
 
-use crate::routes::{create_user, User};
+use crate::api::v1::user::{create_user, User};
 use crate::InnerState;
 use crate::errors::AppError; // Added
 

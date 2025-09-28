@@ -5,13 +5,13 @@ use serde_json::{json, Value};
 use tower_cookies::Cookies;
 
 use crate::{
-    auth::renew_token, errors::AppError, routes::{get_email_from_token}, InnerState
+    api::v1::auth::renew_token, errors::AppError, api::v1::user::{get_email_from_token}, InnerState
 };
 
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use super::{save_youtube_channels, YoutubeChannel};
+use crate::api::v1::channel::{save_youtube_channels, YoutubeChannel};
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

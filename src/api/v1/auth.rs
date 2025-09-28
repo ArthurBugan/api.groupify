@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use sqlx::{postgres::PgQueryResult, PgPool, Row};
 use tower_cookies::Cookies;
 
-use crate::{errors::AppError, routes::get_email_from_token, InnerState};
+use crate::{errors::AppError, api::v1::user::get_email_from_token, InnerState};
 
 #[derive(Debug, Deserialize)]
 pub struct AuthRequest {

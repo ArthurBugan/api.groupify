@@ -5,14 +5,15 @@ use axum::extract::{Path, State};
 use axum::Json;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, to_string_pretty, Value};
+use serde_json::{json, Value};
 use sqlx::FromRow;
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::routes::{get_email_from_token, get_user_id_from_token, Channel};
+use crate::api::v1::channel::Channel;
+use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
