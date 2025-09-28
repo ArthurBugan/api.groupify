@@ -369,7 +369,7 @@ pub async fn update_channels_in_group(
     );
 
     let InnerState {
-        email_client, db, ..
+        db, ..
     } = inner;
     let update_groups_timeout = tokio::time::Duration::from_millis(10000);
 

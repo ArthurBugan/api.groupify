@@ -6,7 +6,6 @@ mod errors;
 mod api;
 mod system;
 
-use crate::api::v1::auth::build_oauth_client;
 use crate::api::v1::routes::create_v1_routes;
 use crate::api::v2::create_v2_router;
 use crate::email::EmailClient;
@@ -23,7 +22,6 @@ use axum::http::HeaderMap;
 use axum::{Extension, Router};
 use bytes::BytesMut;
 use hyper::Method;
-use oauth2::basic::BasicClient;
 use sqlx::PgPool;
 use std::error::Error;
 use time::Duration;
@@ -49,11 +47,13 @@ struct AppState {
     inner: InnerState,
 }
 
+use crate::api::v1::oauth::{build_google_oauth_client, build_discord_oauth_client, OAuthClients};
+
 #[derive(Clone, Debug)]
 struct InnerState {
     pub db: PgPool,
     pub email_client: EmailClient,
-    pub oauth_client: BasicClient,
+    pub oauth_clients: OAuthClients,
 }
 
 #[derive(Default)]
@@ -108,12 +108,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let oauth_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")?;
     let oauth_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")?;
 
-    let oauth_client = build_oauth_client(oauth_id.clone(), oauth_secret);
+    let google_oauth_client = build_google_oauth_client(oauth_id.clone(), oauth_secret);
+    let discord_oauth_client = build_discord_oauth_client(
+        std::env::var("DISCORD_OAUTH_CLIENT_ID")?,
+        std::env::var("DISCORD_OAUTH_CLIENT_SECRET")?,
+    );
 
     let app_state = InnerState {
         db,
         email_client,
-        oauth_client,
+        oauth_clients: OAuthClients {
+            google: google_oauth_client,
+            discord: discord_oauth_client,
+        },
     };
 
     let origins = [

@@ -4,6 +4,8 @@
 //! backward compatibility with existing clients.
 
 pub mod auth;
+pub mod discord_auth;
+pub mod oauth;
 pub mod channel;
 pub mod group;
 pub mod routes;

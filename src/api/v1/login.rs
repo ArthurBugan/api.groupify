@@ -1,15 +1,11 @@
-use crate::authentication::{validate_credentials, Credentials, AuthError};
-use crate::InnerState;
+use crate::authentication::{validate_credentials, Credentials};
 use crate::errors::AppError;
+use crate::InnerState;
 
 use axum::extract::State;
-use axum::http::HeaderMap;
 use axum::Json;
-// StatusCode might not be needed directly in the return type anymore
-// use reqwest::StatusCode; 
 
-use axum::response::Html; // Keep if root() or other handlers use it
-use axum_typed_multipart::{TryFromMultipart, TypedMultipart};
+use axum_typed_multipart::TryFromMultipart;
 use cookie::time::{Duration, OffsetDateTime};
 use cookie::SameSite;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -49,20 +45,12 @@ pub async fn login_user(
     };
 
     tracing::debug!("Validating user credentials");
-    let user_id = validate_credentials(&credentials, &db)
-        .await
-        .map_err(|auth_error| match auth_error {
-            AuthError::InvalidCredentials(e) => {
-                tracing::warn!("Invalid credentials provided for user: {}", form.email);
-                AppError::Authentication(e.context("Invalid credentials supplied"))
-            },
-            AuthError::UnexpectedError(e) => {
-                tracing::error!("Unexpected error during credential validation for user {}: {:?}", form.email, e);
-                AppError::Unexpected(e.context("Credential validation failed"))
-            },
-        })?;
+    let user_id = validate_credentials(&credentials, &db).await?;
 
-    tracing::info!("Credentials validated successfully for user: {}", form.email);
+    tracing::info!(
+        "Credentials validated successfully for user: {}",
+        form.email
+    );
 
     tracing::debug!("Generating JWT token for user: {}", form.email);
     let token = generate_token(&credentials.email, &user_id)?;
@@ -72,11 +60,10 @@ pub async fn login_user(
     now += Duration::days(60);
 
     tracing::debug!("Retrieving GROUPIFY_HOST environment variable");
-    let domain = std::env::var("GROUPIFY_HOST")
-        .map_err(|e| {
-            tracing::error!("GROUPIFY_HOST environment variable not set: {:?}", e);
-            AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
-        })?;
+    let domain = std::env::var("GROUPIFY_HOST").map_err(|e| {
+        tracing::error!("GROUPIFY_HOST environment variable not set: {:?}", e);
+        AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
+    })?;
 
     tracing::debug!("Setting up authentication cookie for domain: {}", domain);
     let mut cookie = Cookie::new("auth-token", token);
@@ -95,7 +82,7 @@ pub async fn login_user(
 #[tracing::instrument(name = "User logout", skip(cookies))]
 pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
     tracing::info!("Starting logout process");
-    
+
     tracing::debug!("Creating removal cookie for auth-token");
     let mut cookie = Cookie::named("auth-token");
     cookie.set_same_site(SameSite::None);
@@ -106,22 +93,15 @@ pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
     Ok(Json(json!({ "data": "logout completed" })))
 }
 
-#[tracing::instrument(name = "Root endpoint", skip(headers))]
-pub async fn root(headers: HeaderMap) -> Html<String> {
-    tracing::debug!("Processing root endpoint request with {} headers", headers.len());
-    Html(format!("<h1>{:?}</h1>", headers))
-}
-
 #[tracing::instrument(name = "Generate JWT token", skip(username, user_id), fields(username = %username, user_id = %user_id))]
-fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> {
+pub fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> {
     tracing::debug!("Starting JWT token generation for user: {}", username);
-    
+
     tracing::debug!("Retrieving SECRET_TOKEN environment variable");
-    let key = std::env::var("SECRET_TOKEN")
-        .map_err(|e| {
-            tracing::error!("SECRET_TOKEN environment variable not set: {:?}", e);
-            AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set"))
-        })?;
+    let key = std::env::var("SECRET_TOKEN").map_err(|e| {
+        tracing::error!("SECRET_TOKEN environment variable not set: {:?}", e);
+        AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set"))
+    })?;
 
     tracing::debug!("Creating JWT claims for user: {}", username);
     let claims = Claims {
@@ -130,11 +110,11 @@ fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> {
         role: "user".to_owned(),
         exp: (chrono::Utc::now() + chrono::Duration::days(90)).timestamp() as usize,
     };
-    
+
     tracing::debug!("Encoding JWT token");
     let header = Header::new(Algorithm::HS256);
-    let token = encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes()))
-        .map_err(|e| {
+    let token =
+        encode(&header, &claims, &EncodingKey::from_secret(key.as_bytes())).map_err(|e| {
             tracing::error!("Failed to encode JWT token for user {}: {:?}", username, e);
             AppError::Unexpected(anyhow::Error::new(e).context("Failed to encode JWT token"))
         })?;

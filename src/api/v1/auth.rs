@@ -4,71 +4,49 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Local};
+use cookie::{Cookie, SameSite};
 use oauth2::{
-    basic::BasicClient, reqwest::async_http_client, AuthUrl, AuthorizationCode, ClientId,
-    ClientSecret, RedirectUrl, RefreshToken, RequestTokenError, TokenResponse, TokenUrl,
+    basic::BasicClient, reqwest::async_http_client, AuthorizationCode, RefreshToken,
+    RequestTokenError, TokenResponse,
 };
-use reqwest::Client;
-use serde::Deserialize;
 use serde_json::{json, Value};
-use sqlx::{postgres::PgQueryResult, PgPool, Row};
+use sqlx::{PgPool, Row};
+use time::OffsetDateTime;
 use tower_cookies::Cookies;
 
-use crate::{errors::AppError, api::v1::user::get_email_from_token, InnerState};
-
-#[derive(Debug, Deserialize)]
-pub struct AuthRequest {
-    code: String,
-}
-
-#[derive(Deserialize, sqlx::FromRow, Clone)]
-pub struct UserProfile {
-    email: String,
-}
-
-#[tracing::instrument(name = "Build OAuth client", skip(client_id, client_secret))]
-pub fn build_oauth_client(client_id: String, client_secret: String) -> BasicClient {
-    tracing::info!("Building OAuth client for Google authentication");
-    tracing::debug!("Setting up OAuth client with redirect URL");
-    
-    let redirect_url = "https://coolify.groupify.dev/api/auth/google_callback";
-    //let redirect_url = "http://localhost:3001/auth/google_callback";
-
-    tracing::debug!("Using redirect URL: {}", redirect_url);
-
-    let client = BasicClient::new(
-        ClientId::new(client_id),
-        Some(ClientSecret::new(client_secret)),
-        AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string())
-            .expect("Invalid authorization endpoint URL"),
-        Some(
-            TokenUrl::new("https://www.googleapis.com/oauth2/v3/token".to_string())
-                .expect("Invalid token endpoint URL"),
-        ),
-    )
-    .set_redirect_uri(RedirectUrl::new(redirect_url.to_string()).unwrap());
-
-    tracing::info!("OAuth client successfully built");
-    client
-}
+use crate::{
+    api::v1::{
+        login::generate_token, oauth::{
+            fetch_user_profile, generate_auth_url, update_user_session, AuthRequest, OAuthProvider,
+            Session,
+        }, user::get_email_from_token
+    },
+    errors::AppError,
+    InnerState,
+};
 
 #[tracing::instrument(name = "Google OAuth callback", skip(inner, query), fields(code_length = query.code.len()))]
 pub async fn google_callback(
+    cookies: Cookies,
     State(inner): State<InnerState>,
     Query(query): Query<AuthRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     tracing::info!("Processing Google OAuth callback");
-    
+
     let InnerState {
-        db, oauth_client, ..
+        db, oauth_clients, ..
     } = inner;
     let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
 
-    tracing::debug!("Domain: {}, Authorization code received (length: {})", domain, query.code.len());
-    tracing::info!("domain {:?} code {:?}", domain, query.code);
+    tracing::debug!(
+        "Domain: {}, Authorization code received (length: {})",
+        domain,
+        query.code.len()
+    );
 
     tracing::debug!("Exchanging authorization code for access token");
-    let token = oauth_client
+    let token = oauth_clients
+        .google
         .exchange_code(AuthorizationCode::new(query.code))
         .request_async(async_http_client)
         .await
@@ -113,72 +91,91 @@ pub async fn google_callback(
     tracing::info!("Passou do oauth {:?}", token);
 
     tracing::debug!("Fetching user profile from Google");
-    let profile = fetch_user_profile(&token.access_token().secret()).await?;
+    let profile =
+        fetch_user_profile(&token.access_token().secret(), &OAuthProvider::Google).await?;
+
     tracing::info!("Retrieved user profile for email: {}", profile.email);
-    
-    let max_age = calculate_token_expiry(token.expires_in());
+
+    let max_age = calculate_token_expiry(token.expires_in()).await;
     tracing::debug!("Calculated token expiry: {:?}", max_age);
 
-    let refresh_token = token
-        .refresh_token()
-        .ok_or_else(|| {
-            tracing::error!("No refresh token received from OAuth provider");
-            AppError::Validation(String::from("Token not found"))
-        })?;
+    let refresh_token = token.refresh_token().ok_or_else(|| {
+        tracing::error!("No refresh token received from OAuth provider");
+        AppError::Validation(String::from("Token not found"))
+    })?;
 
-    tracing::debug!("Updating user session in database");
+    tracing::debug!("Generating JWT token for user: {}", profile.email);
+    let access_token = generate_token(&profile.email, profile.display_name.as_deref().unwrap_or(""))?;
+    tracing::debug!("JWT token generated successfully");
+
+    let mut now = OffsetDateTime::now_utc();
+    now += time::Duration::days(60);
+
+    let mut cookie = Cookie::new("auth-token", access_token);
+
+    // Check if we're in development mode
+    let is_development = std::env::var("ENVIRONMENT")
+        .unwrap_or_else(|_| "production".to_string())
+        .to_lowercase()
+        == "development";
+
+    if is_development {
+        // Development settings - works with HTTP
+        cookie.set_domain("localhost".to_string());
+        cookie.set_same_site(SameSite::Lax); // More permissive for development
+        cookie.set_secure(false); // Allow HTTP in development
+    } else {
+        // Production settings - requires HTTPS
+        let cookie_domain = if domain.starts_with('.') {
+            domain.clone()
+        } else {
+            format!(".{}", domain.clone())
+        };
+        cookie.set_domain(cookie_domain);
+        cookie.set_same_site(SameSite::None);
+        cookie.set_secure(true);
+    }
+
+    cookie.set_path("/");
+    cookie.set_expires(now);
+    cookie.set_http_only(true);
+    cookies.add(cookie);
+
     update_user_session(
         &db,
         &profile.email,
         token.access_token().secret(),
         max_age,
         refresh_token.secret(),
+        &OAuthProvider::Google,
     )
     .await?;
 
-    let redirect_str = format!("https://{}/dashboard/groups", domain);
-    tracing::info!("Redirecting user to: {}", redirect_str);
+    let protocol = if is_development { "http" } else { "https" };
+    let redirect_url = format!(
+        "{}://{}/dashboard?auth=success&provider=google",
+        protocol, domain
+    );
+    tracing::info!("Redirecting user to: {}", redirect_url);
 
-    Ok(Redirect::to(redirect_str.as_str()))
-}
-
-#[tracing::instrument(name = "Fetch user profile from Google", skip(access_token), fields(token_length = access_token.len()))]
-async fn fetch_user_profile(access_token: &str) -> Result<UserProfile, AppError> {
-    tracing::info!("Fetching user profile from Google API");
-    tracing::debug!("Making request to Google userinfo endpoint");
-    
-    let req = Client::new();
-    let response = req.get("https://openidconnect.googleapis.com/v1/userinfo")
-        .bearer_auth(access_token)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to send request to Google userinfo API: {:?}", e);
-            AppError::Unexpected(e.into())
-        })?;
-
-    tracing::debug!("Received response from Google API, parsing JSON");
-    let profile = response
-        .json::<UserProfile>()
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to parse user profile JSON: {:?}", e);
-            AppError::Unexpected(e.into())
-        })?;
-
-    tracing::info!("Successfully fetched user profile for: {}", profile.email);
-    Ok(profile)
+    Ok(Redirect::to(redirect_url.as_str()))
 }
 
 #[tracing::instrument(name = "Calculate token expiry", fields(expires_in_seconds = expires_in.as_ref().map(|d| d.as_secs())))]
-fn calculate_token_expiry(expires_in: Option<std::time::Duration>) -> chrono::NaiveDateTime {
+pub async fn calculate_token_expiry(
+    expires_in: Option<std::time::Duration>,
+) -> chrono::NaiveDateTime {
     tracing::debug!("Calculating token expiry time");
-    
+
     match expires_in {
         Some(secs) => {
             let duration = Duration::seconds(secs.as_secs().try_into().unwrap_or(0));
             let expiry = Local::now().naive_local() + duration;
-            tracing::debug!("Token will expire at: {:?} (in {} seconds)", expiry, secs.as_secs());
+            tracing::debug!(
+                "Token will expire at: {:?} (in {} seconds)",
+                expiry,
+                secs.as_secs()
+            );
             expiry
         }
         None => {
@@ -189,58 +186,6 @@ fn calculate_token_expiry(expires_in: Option<std::time::Duration>) -> chrono::Na
     }
 }
 
-#[tracing::instrument(name = "Update user session", skip(db, access_token, refresh_token), fields(email = %email, expires_at = %expires_at))]
-async fn update_user_session(
-    db: &sqlx::PgPool,
-    email: &str,
-    access_token: &str,
-    expires_at: chrono::NaiveDateTime,
-    refresh_token: &str,
-) -> Result<(), AppError> {
-    tracing::info!("Updating user session in database");
-    tracing::debug!("Deleting existing sessions for user: {}", email);
-    
-    sqlx::query("DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1)")
-        .bind(email)
-        .execute(db)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to delete existing sessions: {:?}", e);
-            AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
-        })?;
-
-    tracing::debug!("Inserting new session record");
-    let result: PgQueryResult = sqlx::query(
-        "INSERT INTO sessions (user_id, session_id, expires_at, refresh_token)
-       VALUES (
-           (SELECT id FROM users WHERE email = $1 LIMIT 1), $2, $3, $4
-       )
-       ON CONFLICT (user_id)
-       DO UPDATE
-       SET session_id = EXCLUDED.session_id,
-           expires_at = EXCLUDED.expires_at",
-    )
-    .bind(email)
-    .bind(access_token)
-    .bind(expires_at)
-    .bind(refresh_token)
-    .execute(db)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to insert/update session: {:?}", e);
-        AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
-    })?;
-
-    // Check how many rows were affected
-    if result.rows_affected() == 0 {
-        tracing::error!("No rows were affected during session update");
-        return Err(AppError::Database(anyhow::anyhow!("No rows were affected")));
-    }
-
-    tracing::info!("Successfully updated session for user: {} (rows affected: {})", email, result.rows_affected());
-    Ok(())
-}
-
 #[tracing::instrument(name = "Renew OAuth token", skip(db, oauth_client), fields(email = %email))]
 pub async fn renew_token(
     db: PgPool,
@@ -248,7 +193,7 @@ pub async fn renew_token(
     email: String,
 ) -> Result<(), AppError> {
     tracing::info!("Renewing OAuth token for user: {}", email);
-    
+
     tracing::debug!("Fetching refresh token from database");
     let refresh_token = fetch_refresh_token(&db, &email).await?;
 
@@ -264,7 +209,7 @@ pub async fn renew_token(
         })?;
 
     tracing::info!("Successfully renewed token for user: {}", email);
-    let max_age = calculate_token_expiry(token.expires_in());
+    let max_age = calculate_token_expiry(token.expires_in()).await;
 
     tracing::debug!("Updating session with new token");
     update_user_session(
@@ -273,6 +218,7 @@ pub async fn renew_token(
         token.access_token().secret(),
         max_age,
         refresh_token.secret(),
+        &OAuthProvider::Google,
     )
     .await?;
 
@@ -283,7 +229,7 @@ pub async fn renew_token(
 #[tracing::instrument(name = "Fetch refresh token", skip(db), fields(email = %email))]
 async fn fetch_refresh_token(db: &sqlx::PgPool, email: &str) -> Result<RefreshToken, AppError> {
     tracing::debug!("Fetching refresh token from database for user: {}", email);
-    
+
     let refresh_token: String = sqlx::query("SELECT refresh_token FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)")
       .bind(email)
       .fetch_one(db)
@@ -304,7 +250,7 @@ pub async fn check_google_session(
     cookies: Cookies,
 ) -> Result<Json<Value>, AppError> {
     tracing::info!("Checking Google session validity");
-    
+
     let InnerState { db, .. } = inner;
 
     tracing::debug!("Extracting auth token from cookies");
@@ -333,23 +279,35 @@ pub async fn check_google_session(
     };
 
     tracing::debug!("Checking session existence in database");
-    let session: PgQueryResult = sqlx::query("SELECT refresh_token FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)")
-        .bind(&email)
-        .execute(&db)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to query session: {:?}", e);
-            AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
-        })?;
+    let session: Option<Session> = sqlx::query_as::<_, Session>(
+        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
+    )
+    .bind(&email)
+    .fetch_optional(&db)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to query session: {:?}", e);
+        AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
+    })?;
 
     tracing::debug!("Session query result: {:?}", session);
     tracing::info!("session {:?}", session);
 
-    if session.rows_affected() == 0 {
+    if session.is_none() {
         tracing::warn!("No session found for user: {}", email);
         return Err(AppError::Validation(String::from("Session not found")));
     }
 
     tracing::info!("Valid session found for user: {}", email);
     return Ok(Json(json!({ "success": "true" })));
+}
+
+#[tracing::instrument(name = "Google login initiation")]
+pub async fn google_login(State(inner): State<InnerState>) -> Result<impl IntoResponse, AppError> {
+    tracing::info!("Initiating Google OAuth login");
+
+    let auth_url = generate_auth_url(&inner.oauth_clients.google, &OAuthProvider::Google);
+
+    tracing::debug!("Generated Google auth URL: {}", auth_url);
+    Ok(Redirect::to(&auth_url))
 }
