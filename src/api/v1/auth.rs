@@ -153,7 +153,7 @@ pub async fn google_callback(
 
     let protocol = if is_development { "http" } else { "https" };
     let redirect_url = format!(
-        "{}://{}/dashboard?auth=success&provider=google",
+        "{}://{}/dashboard/groups?auth=success&provider=google",
         protocol, domain
     );
     tracing::info!("Redirecting user to: {}", redirect_url);
