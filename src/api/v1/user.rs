@@ -1,5 +1,5 @@
 use crate::authentication::compute_password_hash;
-use crate::api::v1::Claims;
+use crate::api::v1::login::Claims;
 use crate::errors::AppError; // Added
 use crate::InnerState;
 use axum::extract::State;

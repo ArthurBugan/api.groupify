@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::InnerState;
 
-use crate::api::v1::{get_email_from_token, get_user_id_from_token};
+use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
 
 #[derive(Serialize, Deserialize, FromRow, Debug)]
 #[serde(rename_all = "camelCase")]

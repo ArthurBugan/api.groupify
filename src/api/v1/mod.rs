@@ -1,19 +1,16 @@
-mod channel;
-mod group;
-mod link_shortner;
-mod login;
-mod subscription_confirm;
-mod subscriptions;
-mod survey;
-mod user;
-mod youtube;
+//! API Version 1 endpoints
+//! 
+//! This module contains all V1 API endpoints, maintaining
+//! backward compatibility with existing clients.
 
-pub use channel::*;
-pub use group::*;
-pub use link_shortner::*;
-pub use login::*;
-pub use subscription_confirm::*;
-pub use subscriptions::*;
-pub use survey::*;
-pub use user::*;
-pub use youtube::*;
+pub mod auth;
+pub mod channel;
+pub mod group;
+pub mod routes;
+pub mod subscriptions;
+pub mod subscription_confirm;
+pub mod user;
+pub mod login;
+pub mod survey;
+pub mod youtube;
+pub mod link_shortner;

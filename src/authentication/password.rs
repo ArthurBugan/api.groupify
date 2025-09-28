@@ -1,7 +1,8 @@
-use crate::api::v1::{
-    generate_subscription_token, get_password_confirmation_token_from_user, get_stored_credentials,
+use crate::api::v1::user::{
+    get_password_confirmation_token_from_user, get_stored_credentials,
     User,
 };
+use crate::api::v1::subscriptions::generate_subscription_token;
 use crate::errors::AppError;
 use anyhow::{Context};
 use std::collections::HashMap;

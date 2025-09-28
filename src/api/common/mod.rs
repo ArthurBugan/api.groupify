@@ -1,7 +1,11 @@
 //! Common API utilities shared across versions
+//! 
+//! This module contains shared functionality that can be
+//! used across different API versions.
 
 pub mod middleware;
 pub mod responses;
+pub mod tracing;
 pub mod validation;
 
 use serde::{Deserialize, Serialize};

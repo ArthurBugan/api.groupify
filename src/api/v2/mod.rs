@@ -11,14 +11,17 @@ pub mod users;
 pub mod youtube;
 
 use axum::Router;
-use sqlx::PgPool;
+
+use axum::routing::get;
+
+use crate::InnerState;
 
 /// Creates the V2 API router
 #[tracing::instrument(name = "create_v2_router")]
-pub fn create_v2_router(pool: PgPool) -> Router {
+pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
     tracing::info!("Creating V2 API router");
     
     Router::new()
-        // Enhanced routes will be implemented here
-        // For now, return an empty router
+        .route("/", get(|| async { "API V2 - Coming Soon" }))
+        .with_state(state)
 }
