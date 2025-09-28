@@ -87,7 +87,7 @@ pub async fn sync_channels_from_youtube(
     tracing::info!("Starting YouTube channel synchronization");
     let InnerState {
         db,
-        oauth_client,
+        oauth_clients,
         ..
     } = &inner;
 
@@ -123,7 +123,7 @@ pub async fn sync_channels_from_youtube(
 
     if expires_at < Local::now() {
         tracing::info!("Session expired, renewing token for user: {}", email);
-        let _ = renew_token(db.clone(), oauth_client.clone(), email.clone()).await;
+        let _ = renew_token(db.clone(), oauth_clients.google.clone(), email.clone()).await;
         tracing::debug!("Token renewal completed");
     }
 

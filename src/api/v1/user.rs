@@ -223,7 +223,6 @@ pub async fn delete_account(
     let auth_token = cookies
         .get("auth-token")
         .map(|c| c.value().to_string())
-        // Consider returning AppError::AuthError if token is missing
         .ok_or_else(|| AppError::Unexpected(anyhow::anyhow!("Missing auth-token cookie")));
 
     // Now get_user_id_from_token returns Result<String, AppError>

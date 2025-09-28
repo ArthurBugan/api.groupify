@@ -30,19 +30,12 @@ pub struct PasswordChange {
     pub password_confirmation: String,
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("Invalid credentials.")]
-    InvalidCredentials(#[source] anyhow::Error),
-    #[error(transparent)]
-    UnexpectedError(#[from] anyhow::Error),
-}
 
 #[tracing::instrument(name = "Validate user credentials", skip(credentials, pool), fields(email = %credentials.email))]
 pub async fn validate_credentials(
     credentials: &Credentials,
     pool: &PgPool,
-) -> Result<String, AuthError> {
+) -> Result<String, AppError> {
     tracing::info!("Starting credential validation for user: {}", credentials.email);
     
     let mut user_id = None;
@@ -61,6 +54,12 @@ pub async fn validate_credentials(
             // If the Result is Ok, user will contain the User
             tracing::debug!("Successfully retrieved user credentials from database");
             user_id = user.id;
+
+            if (user.encrypted_password.is_none()) {
+                tracing::warn!("User {} has no encrypted password", credentials.email);
+                    return Err(AppError::NotFound("Login with Google or Discord".to_string()));
+            }
+
             expected_password_hash = user.encrypted_password.unwrap();
             tracing::debug!("User found with ID: {:?}", user_id);
         }
@@ -82,7 +81,7 @@ pub async fn validate_credentials(
         }
         None => {
             tracing::warn!("Credential validation failed - user not found: {}", credentials.email);
-            Err(AuthError::InvalidCredentials(anyhow::anyhow!("Unknown username.")))
+            Err(AppError::Authentication(anyhow::anyhow!("Unknown username.")))
         }
     }
 }
@@ -174,7 +173,7 @@ pub async fn send_forget_password_email(
 fn verify_password_hash(
     expected_password_hash: &str,
     password_candidate: &str,
-) -> Result<(), AuthError> {
+) -> Result<(), AppError> {
     tracing::debug!("Starting password hash verification");
     tracing::debug!("Expected hash length: {}, candidate password length: {}", 
                    expected_password_hash.len(), password_candidate.len());
@@ -187,7 +186,7 @@ fn verify_password_hash(
     let result = Argon2::default()
         .verify_password(password_candidate.as_bytes(), &expected_password_hash)
         .context("Invalid password.")
-        .map_err(AuthError::InvalidCredentials);
+        .map_err(AppError::Authentication);
 
     match result {
         Ok(_) => {

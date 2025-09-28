@@ -12,7 +12,8 @@ use crate::InnerState;
 use crate::api::v1::channel::{all_channels, all_channels_by_group, create_channel, update_channels_in_group, fetch_youtube_channels, save_youtube_channels};
 use crate::api::v1::group::{all_groups, create_group, delete_group, update_group};
 use crate::api::v1::link_shortner::{create_link, get_link_statistics, redirect, update_link};
-use crate::api::v1::auth::{google_callback, check_google_session};
+use crate::api::v1::auth::{google_callback, check_google_session, google_login};
+
 use crate::api::v1::subscriptions::{subscribe};
 use crate::api::v1::subscription_confirm::{confirm};
 use crate::api::v1::user::{delete_account, get_language};
@@ -20,6 +21,7 @@ use crate::api::v1::login::{login_user, logout_user};
 use crate::api::v1::youtube::{sync_channels_from_youtube};
 use crate::api::v1::survey::{insert_survey};
 use crate::authentication::{change_password, forget_password};
+use crate::api::v1::discord_auth::{discord_callback, discord_login, check_discord_session};
 
 
 /// Creates V1 API routes (existing routes for backward compatibility)
@@ -68,8 +70,14 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
         )
         
         // OAuth routes
+        .route("/auth/google", get(google_login))
         .route("/auth/google_callback", get(google_callback))
         .route("/check-google-session", get(check_google_session))
+        
+        // New Discord OAuth routes
+        .route("/auth/discord", get(discord_login))
+        .route("/auth/discord_callback", get(discord_callback))
+        .route("/auth/discord_session", get(check_discord_session))
         
         // Survey routes
         .route("/add-survey", post(insert_survey))

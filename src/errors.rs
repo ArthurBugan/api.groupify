@@ -36,14 +36,6 @@ pub enum AppError {
     Unexpected(#[from] anyhow::Error), // Catch-all for other anyhow errors
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum AuthError {
-    #[error("Invalid credentials.")]
-    InvalidCredentials(#[source] anyhow::Error),
-    #[error(transparent)]
-    UnexpectedError(#[from] anyhow::Error),
-}
-
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, error_message) = match &self {
@@ -156,14 +148,5 @@ impl From<reqwest::Error> for AppError {
         );
         
         AppError::ExternalService(anyhow::Error::new(err).context(context))
-    }
-}
-
-impl From<AuthError> for AppError {
-    fn from(err: AuthError) -> Self {
-        match err {
-            AuthError::InvalidCredentials(source) => AppError::Authentication(source.into()),
-            AuthError::UnexpectedError(source) => AppError::Unexpected(source.into()),
-        }
     }
 }
