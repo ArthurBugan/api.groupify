@@ -4,7 +4,8 @@ use axum::{
     Json,
 };
 use serde_json::json;
-use std::error::Error as StdError; // Alias to avoid conflict with thiserror::Error
+use std::error::Error as StdError;
+use std::collections::HashMap; // Alias to avoid conflict with thiserror::Error
 
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
@@ -34,32 +35,44 @@ pub enum AppError {
 
     #[error("An unexpected error occurred: {0}")]
     Unexpected(#[from] anyhow::Error), // Catch-all for other anyhow errors
+    
+    #[error("Validation errors")]
+    ValidationErrors(HashMap<String, Vec<String>>),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_message) = match &self {
-            AppError::Authentication(e) => (StatusCode::UNAUTHORIZED, format!("{}", e)),
+        let (status, error_message, errors) = match &self {
+            AppError::Authentication(e) => (StatusCode::UNAUTHORIZED, format!("{}", e), None),
             AppError::Database(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Database error: {}", e),
+                None,
             ),
-            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
             AppError::ExternalService(e) => (
                 StatusCode::BAD_GATEWAY,
                 format!("External service error: {}", e),
+                None,
             ),
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
             // Add this new case
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
-            AppError::UrlParse(e) => (StatusCode::BAD_REQUEST, format!("Invalid URL: {}", e)),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
+            AppError::UrlParse(e) => (StatusCode::BAD_REQUEST, format!("Invalid URL: {}", e), None),
             AppError::Timeout(e) => (
                 StatusCode::GATEWAY_TIMEOUT,
                 format!("Operation timed out: {}", e),
+                None,
             ),
             AppError::Unexpected(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("An unexpected error occurred: {}", e),
+                None,
+            ),
+            AppError::ValidationErrors(validation_errors) => (
+                StatusCode::BAD_REQUEST,
+                "Validation failed".to_string(),
+                Some(validation_errors.clone()),
             ),
         };
 
@@ -84,7 +97,18 @@ impl IntoResponse for AppError {
             }
         }
 
-        let body = Json(json!({ "error": error_message }));
+        // Format the response to match the frontend's expected format
+        let body = match errors {
+            Some(validation_errors) => Json(json!({
+                "message": error_message,
+                "status": status.as_u16(),
+                "errors": validation_errors
+            })),
+            None => Json(json!({
+                "message": error_message,
+                "status": status.as_u16()
+            })),
+        };
         (status, body).into_response()
     }
 }
@@ -99,7 +123,6 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
-// Example for reqwest::Error, if you make HTTP calls
 impl From<reqwest::Error> for AppError {
     fn from(err: reqwest::Error) -> Self {
         let mut context_parts = Vec::new();

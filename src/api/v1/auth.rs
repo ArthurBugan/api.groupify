@@ -4,23 +4,23 @@ use axum::{
     Json,
 };
 use chrono::{Duration, Local};
-use cookie::{Cookie, SameSite};
+
 use oauth2::{
     basic::BasicClient, reqwest::async_http_client, AuthorizationCode, RefreshToken,
     RequestTokenError, TokenResponse,
 };
 use serde_json::{json, Value};
 use sqlx::{PgPool, Row};
-use time::OffsetDateTime;
+
 use tower_cookies::Cookies;
 
 use crate::{
-    api::v1::{
+    api::{common::utils::setup_auth_cookie, v1::{
         login::generate_token, oauth::{
             fetch_user_profile, generate_auth_url, update_user_session, AuthRequest, OAuthProvider,
             Session,
         }, user::get_email_from_token
-    },
+    }},
     errors::AppError,
     InnerState,
 };
@@ -108,38 +108,8 @@ pub async fn google_callback(
     let access_token = generate_token(&profile.email, profile.display_name.as_deref().unwrap_or(""))?;
     tracing::debug!("JWT token generated successfully");
 
-    let mut now = OffsetDateTime::now_utc();
-    now += time::Duration::days(60);
-
-    let mut cookie = Cookie::new("auth-token", access_token);
-
-    // Check if we're in development mode
-    let is_development = std::env::var("ENVIRONMENT")
-        .unwrap_or_else(|_| "production".to_string())
-        .to_lowercase()
-        == "development";
-
-    if is_development {
-        // Development settings - works with HTTP
-        cookie.set_domain("localhost".to_string());
-        cookie.set_same_site(SameSite::Lax); // More permissive for development
-        cookie.set_secure(false); // Allow HTTP in development
-    } else {
-        // Production settings - requires HTTPS
-        let cookie_domain = if domain.starts_with('.') {
-            domain.clone()
-        } else {
-            format!(".{}", domain.clone())
-        };
-        cookie.set_domain(cookie_domain);
-        cookie.set_same_site(SameSite::None);
-        cookie.set_secure(true);
-    }
-
-    cookie.set_path("/");
-    cookie.set_expires(now);
-    cookie.set_http_only(true);
-    cookies.add(cookie);
+    // Use the utility function instead of duplicated code
+    setup_auth_cookie(&access_token, &domain, &cookies);
 
     update_user_session(
         &db,
@@ -150,6 +120,12 @@ pub async fn google_callback(
         &OAuthProvider::Google,
     )
     .await?;
+
+        // Check if we're in development mode
+    let is_development = std::env::var("ENVIRONMENT")
+        .unwrap_or_else(|_| "production".to_string())
+        .to_lowercase()
+        == "development";
 
     let protocol = if is_development { "http" } else { "https" };
     let redirect_url = format!(
@@ -310,4 +286,36 @@ pub async fn google_login(State(inner): State<InnerState>) -> Result<impl IntoRe
 
     tracing::debug!("Generated Google auth URL: {}", auth_url);
     Ok(Redirect::to(&auth_url))
+}
+
+#[tracing::instrument(name = "Get user email from token", skip(cookies))]
+pub async fn me(
+    cookies: Cookies,
+) -> Result<Json<Value>, AppError> {
+    tracing::info!("Getting user email from token");
+
+    tracing::debug!("Extracting auth token from cookies");
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        tracing::warn!("No auth token found in cookies");
+        return Err(AppError::Validation(String::from("No auth token found")));
+    }
+
+    tracing::debug!("Auth token found, extracting email");
+    let email = get_email_from_token(auth_token).await;
+
+    match email {
+        Ok(email) => {
+            tracing::debug!("Successfully extracted email from token: {}", email);
+            Ok(Json(json!({ "email": email })))
+        }
+        Err(e) => {
+            tracing::error!("Failed to extract email from token: {:?}", e);
+            Err(AppError::Validation(String::from("Invalid auth token")))
+        }
+    }
 }

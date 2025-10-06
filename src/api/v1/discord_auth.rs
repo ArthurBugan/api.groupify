@@ -3,20 +3,14 @@ use axum::{
     response::{IntoResponse, Redirect},
     Json,
 };
-use chrono::Duration;
-use cookie::{Cookie, SameSite};
 use oauth2::{reqwest::async_http_client, AuthorizationCode, TokenResponse};
 use serde_json::{json, Value};
-use time::OffsetDateTime;
 use tower_cookies::Cookies;
 
 use crate::{
-    api::v1::oauth::{
+    api::{common::utils::setup_auth_cookie, v1::{login::generate_token, oauth::{
         fetch_user_profile, update_user_session, AuthRequest, OAuthProvider, Session,
-    },
-    api::v1::login::{
-        generate_token,
-    },
+    }}},
     errors::AppError,
     InnerState,
 };
@@ -80,9 +74,6 @@ pub async fn discord_callback(
     let token = generate_token(&user_profile.email, user_profile.display_name.as_deref().unwrap_or(""))?;
     tracing::debug!("JWT token generated successfully");
 
-    let mut now = OffsetDateTime::now_utc();
-    now += time::Duration::days(60);
-
     tracing::debug!("Retrieving GROUPIFY_HOST environment variable");
     let domain = std::env::var("GROUPIFY_HOST")
         .map_err(|e| {
@@ -90,35 +81,15 @@ pub async fn discord_callback(
             AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
         })?;
 
-    tracing::debug!("Setting up authentication cookie for domain: {}", domain);
-    let mut cookie = Cookie::new("auth-token", token);
+    // Use the utility function instead of duplicated code
+    setup_auth_cookie(&token, &domain, &cookies);
 
-    // Check if we're in development mode
+        // Check if we're in development mode
     let is_development = std::env::var("ENVIRONMENT")
         .unwrap_or_else(|_| "production".to_string())
-        .to_lowercase() == "development";
+        .to_lowercase()
+        == "development";
 
-    if is_development {
-        // Development settings - works with HTTP
-        cookie.set_domain("localhost".to_string());
-        cookie.set_same_site(SameSite::Lax); // More permissive for development
-        cookie.set_secure(false); // Allow HTTP in development
-    } else {
-        // Production settings - requires HTTPS
-        let cookie_domain = if domain.starts_with('.') {
-            domain
-        } else {
-            format!(".{}", domain)
-        };
-        cookie.set_domain(cookie_domain);
-        cookie.set_same_site(SameSite::None);
-        cookie.set_secure(true);
-    }
-    
-    cookie.set_path("/");
-    cookie.set_expires(now);
-    cookie.set_http_only(true);
-    cookies.add(cookie);
 
     let protocol = if is_development { "http" } else { "https" };
     let redirect_url = format!(

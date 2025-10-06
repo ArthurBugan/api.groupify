@@ -3,9 +3,12 @@ use axum::extract::State;
 use axum::Json;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
+use serde_json::{json, Value};
 use sqlx::{Executor, Postgres, Transaction};
+use tower_cookies::Cookies;
 use std::collections::HashMap;
 
+use crate::api::common::utils::setup_auth_cookie;
 use crate::api::v1::user::{create_user, User};
 use crate::InnerState;
 use crate::errors::AppError; // Added
@@ -15,8 +18,9 @@ use crate::email::EmailClient;
 #[tracing::instrument(name = "Subscribe new user", skip(inner, user), fields(user_email = %user.email))]
 pub async fn subscribe(
     State(inner): State<InnerState>,
+    cookies: Cookies,
     Json(user): Json<User>,
-) -> Result<Json<String>, AppError> {
+) -> Result<Json<Value>, AppError> {
     tracing::info!("Starting subscription process for user: {}", user.email);
     let InnerState {
         email_client, db, ..
@@ -44,8 +48,13 @@ pub async fn subscribe(
     let _resp = send_confirmation_email(&email_client, user.clone(), &subscription_token).await?;
     tracing::info!("Confirmation email sent successfully to: {}", user.email);
 
-    tracing::info!("Subscription process completed for user: {}", user.email);
-    Ok(Json("OK".to_owned()))
+    let domain = std::env::var("GROUPIFY_HOST").map_err(|e| {
+        tracing::error!("GROUPIFY_HOST environment variable not set: {:?}", e);
+        AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
+    })?;
+
+    setup_auth_cookie(&subscription_token, &domain, &cookies);
+    Ok(Json(json!({ "message": "Subscription process completed successfully" })))
 }
 
 #[tracing::instrument(name = "Generate subscription token")]

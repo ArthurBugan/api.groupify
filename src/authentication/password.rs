@@ -1,10 +1,9 @@
-use crate::api::v1::user::{
-    get_password_confirmation_token_from_user, get_stored_credentials,
-    User,
-};
 use crate::api::v1::subscriptions::generate_subscription_token;
+use crate::api::v1::user::{
+    get_password_confirmation_token_from_user, get_stored_credentials, User,
+};
 use crate::errors::AppError;
-use anyhow::{Context};
+use anyhow::Context;
 use std::collections::HashMap;
 
 use crate::email::EmailClient;
@@ -16,7 +15,6 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{Executor, PgPool, Postgres, Transaction};
-
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -30,14 +28,16 @@ pub struct PasswordChange {
     pub password_confirmation: String,
 }
 
-
 #[tracing::instrument(name = "Validate user credentials", skip(credentials, pool), fields(email = %credentials.email))]
 pub async fn validate_credentials(
     credentials: &Credentials,
     pool: &PgPool,
 ) -> Result<String, AppError> {
-    tracing::info!("Starting credential validation for user: {}", credentials.email);
-    
+    tracing::info!(
+        "Starting credential validation for user: {}",
+        credentials.email
+    );
+
     let mut user_id = None;
     let mut expected_password_hash = String::from(
         "$argon2id$v=19$m=15000,t=2,p=1$\
@@ -55,9 +55,11 @@ pub async fn validate_credentials(
             tracing::debug!("Successfully retrieved user credentials from database");
             user_id = user.id;
 
-            if (user.encrypted_password.is_none()) {
+            if user.encrypted_password.is_none() {
                 tracing::warn!("User {} has no encrypted password", credentials.email);
-                    return Err(AppError::NotFound("Login with Google or Discord".to_string()));
+                return Err(AppError::NotFound(
+                    "Login with Google or Discord".to_string(),
+                ));
             }
 
             expected_password_hash = user.encrypted_password.unwrap();
@@ -76,12 +78,20 @@ pub async fn validate_credentials(
 
     match user_id {
         Some(id) => {
-            tracing::info!("Credential validation successful for user: {}", credentials.email);
+            tracing::info!(
+                "Credential validation successful for user: {}",
+                credentials.email
+            );
             Ok(id)
         }
         None => {
-            tracing::warn!("Credential validation failed - user not found: {}", credentials.email);
-            Err(AppError::Authentication(anyhow::anyhow!("Unknown username.")))
+            tracing::warn!(
+                "Credential validation failed - user not found: {}",
+                credentials.email
+            );
+            Err(AppError::Authentication(anyhow::anyhow!(
+                "Unknown username."
+            )))
         }
     }
 }
@@ -92,13 +102,16 @@ pub async fn forget_password(
     Json(user): Json<User>,
 ) -> Result<Json<Value>, AppError> {
     tracing::info!("Starting password reset process for user: {}", user.email);
-    
+
     let InnerState {
         email_client, db, ..
     } = inner;
 
     tracing::debug!("Beginning database transaction");
-    let mut transaction = db.begin().await.context("Failed to begin database transaction.")?;
+    let mut transaction = db
+        .begin()
+        .await
+        .context("Failed to begin database transaction.")?;
 
     tracing::debug!("Retrieving user credentials from database");
     let user_id_obj = get_stored_credentials(&user.email, &db).await?;
@@ -106,21 +119,30 @@ pub async fn forget_password(
 
     tracing::debug!("Generating password reset token");
     let subscription_token = generate_subscription_token();
-    tracing::debug!("Password reset token generated (length: {})", subscription_token.len());
+    tracing::debug!(
+        "Password reset token generated (length: {})",
+        subscription_token.len()
+    );
 
     tracing::debug!("Storing reset token in database");
     store_token(&mut transaction, &user_id_obj.id, &subscription_token).await?;
 
     tracing::debug!("Committing database transaction");
-    transaction.commit().await.context("Failed to commit database transaction.")?;
+    transaction
+        .commit()
+        .await
+        .context("Failed to commit database transaction.")?;
     tracing::info!("Password reset token stored successfully");
 
     tracing::debug!("Sending password reset email");
     send_forget_password_email(&email_client, user.clone(), &subscription_token).await?;
     tracing::info!("Password reset email sent successfully to: {}", user.email);
 
-    tracing::info!("Password reset process completed successfully for user: {}", user.email);
-    return Ok(Json(json!({ "success": true })))
+    tracing::info!(
+        "Password reset process completed successfully for user: {}",
+        user.email
+    );
+    return Ok(Json(json!({ "success": true })));
 }
 
 #[tracing::instrument(
@@ -134,7 +156,7 @@ pub async fn send_forget_password_email(
     forget_password_token: &str,
 ) -> Result<reqwest::Response, AppError> {
     tracing::info!("Preparing password reset email for user: {}", user.email);
-    
+
     let confirmation_link = format!(
         "{}/forget-password/confirm/{}",
         &String::from("https://groupify.dev"),
@@ -175,9 +197,12 @@ fn verify_password_hash(
     password_candidate: &str,
 ) -> Result<(), AppError> {
     tracing::debug!("Starting password hash verification");
-    tracing::debug!("Expected hash length: {}, candidate password length: {}", 
-                   expected_password_hash.len(), password_candidate.len());
-    
+    tracing::debug!(
+        "Expected hash length: {}, candidate password length: {}",
+        expected_password_hash.len(),
+        password_candidate.len()
+    );
+
     tracing::debug!("Parsing password hash in PHC format");
     let expected_password_hash = PasswordHash::new(expected_password_hash)
         .context("Failed to parse hash in PHC string format.")?;
@@ -212,18 +237,23 @@ pub async fn change_password(
 ) -> Result<Json<Value>, AppError> {
     tracing::info!("Starting password change process");
     tracing::debug!("Reset token length: {}", forget_password_token.len());
-    
+
     let InnerState { db, .. } = inner;
 
     tracing::debug!("Validating password reset token");
     let subscriber_id =
         get_password_confirmation_token_from_user(&db, forget_password_token).await?;
-    tracing::debug!("Password reset token validated for user ID: {:?}", subscriber_id);
+    tracing::debug!(
+        "Password reset token validated for user ID: {:?}",
+        subscriber_id
+    );
 
     tracing::debug!("Validating password confirmation match");
     if password_change.password != password_change.password_confirmation {
         tracing::warn!("Password confirmation mismatch");
-        return Err(AppError::Validation(anyhow::anyhow!("Passwords are different").to_string()));
+        return Err(AppError::Validation(
+            anyhow::anyhow!("Passwords are different").to_string(),
+        ));
     }
     tracing::debug!("Password confirmation validated successfully");
 
@@ -248,7 +278,10 @@ pub async fn change_password(
     .context("Failed to update password in database.")?;
 
     match result {
-        Some(_) => tracing::info!("Password updated successfully for user ID: {:?}", subscriber_id),
+        Some(_) => tracing::info!(
+            "Password updated successfully for user ID: {:?}",
+            subscriber_id
+        ),
         None => tracing::warn!("No user found to update for ID: {:?}", subscriber_id),
     }
 
@@ -262,25 +295,20 @@ pub async fn change_password(
 pub async fn compute_password_hash(password: String) -> Result<String, AppError> {
     tracing::debug!("Starting password hash computation");
     tracing::debug!("Password length: {}", password.len());
-    
+
     tracing::debug!("Generating random salt");
     let salt = SaltString::generate(&mut rand::thread_rng());
     tracing::debug!("Salt generated successfully");
-    
+
     tracing::debug!("Creating Argon2 parameters (memory: 15000, iterations: 2, parallelism: 1)");
-    let params = Params::new(15000, 2, 1, None)
-        .map_err(|e| {
-            tracing::error!("Failed to create Argon2 parameters: {:?}", e);
-            AppError::Unexpected(anyhow::Error::new(e).context("Failed to create Argon2 params"))
-        })?;
-    
+    let params = Params::new(15000, 2, 1, None).map_err(|e| {
+        tracing::error!("Failed to create Argon2 parameters: {:?}", e);
+        AppError::Unexpected(anyhow::Error::new(e).context("Failed to create Argon2 params"))
+    })?;
+
     tracing::debug!("Initializing Argon2 hasher with Argon2id algorithm");
-    let hasher = Argon2::new(
-        Algorithm::Argon2id,
-        Version::V0x13,
-        params,
-    );
-    
+    let hasher = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
     tracing::debug!("Hashing password with Argon2");
     let password_hash = hasher
         .hash_password(password.as_bytes(), &salt)
@@ -289,8 +317,11 @@ pub async fn compute_password_hash(password: String) -> Result<String, AppError>
             AppError::Unexpected(anyhow::Error::new(e).context("Failed to hash password"))
         })?
         .to_string();
-    
-    tracing::debug!("Password hash computed successfully (length: {})", password_hash.len());
+
+    tracing::debug!(
+        "Password hash computed successfully (length: {})",
+        password_hash.len()
+    );
     tracing::info!("Password hash computation completed");
     Ok(password_hash)
 }
@@ -305,24 +336,39 @@ pub async fn store_token(
     subscriber_id: &Option<String>,
     subscription_token: &str,
 ) -> Result<(), AppError> {
-    tracing::info!("Storing password reset token for user ID: {:?}", subscriber_id);
+    tracing::info!(
+        "Storing password reset token for user ID: {:?}",
+        subscriber_id
+    );
     tracing::debug!("Token length: {}", subscription_token.len());
-    
+
     tracing::debug!("Preparing database update query");
     let query = sqlx::query_as::<_, User>(r#" UPDATE users SET recovery_token = $1, recovery_sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2"#)
         .bind(&subscription_token)
         .bind(subscriber_id);
 
     tracing::debug!("Executing token storage query");
-    let result = transaction.execute(query).await.context("Failed to store token in database.")?;
-    
-    tracing::debug!("Token storage query executed, rows affected: {}", result.rows_affected());
-    
+    let result = transaction
+        .execute(query)
+        .await
+        .context("Failed to store token in database.")?;
+
+    tracing::debug!(
+        "Token storage query executed, rows affected: {}",
+        result.rows_affected()
+    );
+
     if result.rows_affected() == 0 {
-        tracing::warn!("No rows affected when storing token for user ID: {:?}", subscriber_id);
+        tracing::warn!(
+            "No rows affected when storing token for user ID: {:?}",
+            subscriber_id
+        );
     } else {
-        tracing::info!("Password reset token stored successfully for user ID: {:?}", subscriber_id);
+        tracing::info!(
+            "Password reset token stored successfully for user ID: {:?}",
+            subscriber_id
+        );
     }
-    
+
     Ok(())
 }

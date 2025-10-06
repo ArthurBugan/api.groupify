@@ -1,6 +1,5 @@
 //! System-level routes and utilities
 
-pub mod debug;
 pub mod health_check;
 pub mod metrics;
 
@@ -14,6 +13,5 @@ pub fn create_system_router(pool: PgPool) -> Router {
     
     Router::new()
         .route("/health", get(health_check::health_check))
-        .route("/debug", get(debug::handle_get))
         .with_state(pool)
 }
