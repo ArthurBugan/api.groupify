@@ -7,6 +7,7 @@ pub mod middleware;
 pub mod responses;
 pub mod tracing;
 pub mod validation;
+pub mod utils;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +45,25 @@ impl<T> ApiResponse<T> {
 pub struct PaginationParams {
     pub page: Option<u32>,
     pub limit: Option<u32>,
+    pub search: Option<String>,
+}
+
+
+
+#[derive(Debug, Serialize)]
+pub struct PaginatedResponse<T> {
+    pub data: Vec<T>,
+    pub pagination: PaginationInfo,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaginationInfo {
+    pub page: u32,
+    pub limit: u32,
+    pub total: i64,
+    pub total_pages: u32,
+    pub has_next: bool,
+    pub has_prev: bool,
 }
 
 impl Default for PaginationParams {
@@ -51,6 +71,7 @@ impl Default for PaginationParams {
         Self {
             page: Some(1),
             limit: Some(20),
+            search: None,
         }
     }
 }

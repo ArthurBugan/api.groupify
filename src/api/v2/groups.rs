@@ -1,0 +1,700 @@
+use crate::api::common::{PaginatedResponse, PaginationInfo, PaginationParams};
+use crate::errors::AppError;
+use anyhow::Result;
+use axum::extract::{Path, Query, State};
+use axum::Json;
+use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
+use sqlx::FromRow;
+use tower_cookies::Cookies;
+use uuid::Uuid;
+
+use crate::api::v1::user::get_email_from_token;
+use crate::InnerState;
+
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Group {
+    pub id: Option<String>,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
+    pub name: String,
+    pub icon: String,
+    pub user_id: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub parent_id: Option<String>,
+    pub nesting_level: Option<i32>,
+    pub display_order: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGroupRequest {
+    pub name: String,
+    pub description: Option<String>,
+    pub category: String,
+    pub icon: String,
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateGroupResponse {
+    pub success: bool,
+    pub message: String,
+    pub data: Group,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateDisplayOrderRequest {
+    pub display_order: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UpdateDisplayOrderResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[tracing::instrument(name = "Get all groups for user", skip(cookies, inner))]
+pub async fn all_groups(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Query(params): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<Group>>, AppError> {
+    tracing::info!("Starting to fetch paginated groups for user");
+
+    let InnerState { db, .. } = inner;
+    let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    tracing::debug!("Auth token length: {}", auth_token.len());
+
+    if auth_token.is_empty() {
+        tracing::warn!("Authentication failed: Missing auth token");
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    tracing::debug!("Extracting email from auth token");
+    let email = get_email_from_token(auth_token).await?;
+    tracing::info!("Successfully extracted email for user: {}", email);
+
+    // Set default pagination values
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(10).max(1).min(100); // Cap at 100 items per page
+    let offset = (page - 1) * limit;
+
+    tracing::debug!(
+        "Pagination: page={}, limit={}, offset={}, search={:?}",
+        page,
+        limit,
+        offset,
+        params.search
+    );
+
+    // Build the search condition if provided
+    let search_condition = if let Some(search_term) = &params.search {
+        format!(
+            "AND (g.name ILIKE '%{}%' OR g.description ILIKE '%{}%')",
+            search_term, search_term
+        )
+    } else {
+        String::new()
+    };
+
+    // Count total groups for pagination
+    let count_query = format!(
+        r#"SELECT COUNT(*) as total 
+           FROM groups g 
+           INNER JOIN users u ON u.id = g.user_id 
+           WHERE u.email = $1 {}"#,
+        search_condition
+    );
+
+    let total_result = match tokio::time::timeout(
+        fetch_groups_timeout,
+        sqlx::query_scalar::<_, i64>(&count_query)
+            .bind(&email)
+            .fetch_one(&db),
+    )
+    .await
+    {
+        Ok(Ok(total)) => total,
+        Ok(Err(e)) => {
+            tracing::error!(
+                "Database error while counting groups for user {}: {:?}",
+                email,
+                e
+            );
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!(
+                "Timeout elapsed while counting groups for user {}: {:?}",
+                email,
+                elapsed
+            );
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                fetch_groups_timeout
+            )));
+        }
+    };
+
+    tracing::debug!("Total groups found: {}", total_result);
+
+    // Calculate pagination info
+    let total_pages = ((total_result as f64) / (limit as f64)).ceil() as u32;
+    let has_next = page < total_pages;
+    let has_prev = page > 1;
+
+    // Fetch paginated groups
+    let groups_query = format!(
+        r#"SELECT g.*, g.id as id, g.created_at as created_at, g.updated_at as updated_at 
+           FROM groups g 
+           INNER JOIN users u ON u.id = g.user_id 
+           WHERE u.email = $1 {} 
+           ORDER BY g.nesting_level ASC, g.display_order ASC, g.name ASC
+           LIMIT $2 OFFSET $3"#,
+        search_condition
+    );
+
+    tracing::debug!("Executing database query to fetch paginated groups");
+    let groups = match tokio::time::timeout(
+        fetch_groups_timeout,
+        sqlx::query_as::<_, Group>(&groups_query)
+            .bind(&email)
+            .bind(limit as i64)
+            .bind(offset as i64)
+            .fetch_all(&db),
+    )
+    .await
+    {
+        Ok(Ok(groups)) => {
+            tracing::info!(
+                "Successfully fetched {} groups for user: {}",
+                groups.len(),
+                email
+            );
+            groups
+        }
+        Ok(Err(e)) => {
+            tracing::error!(
+                "Database error while fetching groups for user {}: {:?}",
+                email,
+                e
+            );
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!(
+                "Timeout elapsed while fetching groups for user {}: {:?}",
+                email,
+                elapsed
+            );
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                fetch_groups_timeout
+            )));
+        }
+    };
+
+    let pagination_info = PaginationInfo {
+        page,
+        limit,
+        total: total_result,
+        total_pages,
+        has_next,
+        has_prev,
+    };
+
+    let response = PaginatedResponse {
+        data: groups,
+        pagination: pagination_info,
+    };
+
+    tracing::debug!(
+        "Returning {} groups with pagination info to client",
+        response.data.len()
+    );
+    Ok(Json(response))
+}
+
+#[tracing::instrument(
+    name = "Update group display order (gap-based)",
+    skip(cookies, inner, payload)
+)]
+pub async fn update_display_order(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<UpdateDisplayOrderRequest>,
+) -> Result<Json<UpdateDisplayOrderResponse>, AppError> {
+    tracing::info!(
+        "Starting gap-based display order update for group: {}",
+        group_id
+    );
+
+    let InnerState { db, .. } = inner;
+    let update_timeout = tokio::time::Duration::from_millis(5000);
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    tracing::debug!("Auth token length: {}", auth_token.len());
+
+    if auth_token.is_empty() {
+        tracing::warn!("Authentication failed: Missing auth token");
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    tracing::debug!("Extracting email from auth token");
+    let email = get_email_from_token(auth_token).await?;
+    tracing::info!("Successfully extracted email for user: {}", email);
+
+    // Get user ID first
+    let user_id_query = r#"
+        SELECT id FROM users WHERE email = $1
+    "#;
+
+    let user_id = match tokio::time::timeout(
+        update_timeout,
+        sqlx::query_scalar::<_, String>(user_id_query)
+            .bind(&email)
+            .fetch_one(&db),
+    )
+    .await
+    {
+        Ok(Ok(id)) => {
+            tracing::debug!("Found user ID: {} for email: {}", id, email);
+            id
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while fetching user ID: {:?}", e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while fetching user ID: {:?}", elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                update_timeout
+            )));
+        }
+    };
+
+    // Verify the user owns this group and get current info
+    let verify_query = r#"
+        SELECT g.id, g.display_order, g.nesting_level
+        FROM groups g 
+        WHERE g.id = $1 AND g.user_id = $2
+    "#;
+
+    let (current_display_order, nesting_level) = match tokio::time::timeout(
+        update_timeout,
+        sqlx::query_as::<_, (String, f64, i32)>(verify_query)
+            .bind(&group_id)
+            .bind(&user_id)
+            .fetch_optional(&db),
+    )
+    .await
+    {
+        Ok(Ok(Some((_, display_order, nesting_level)))) => (display_order, nesting_level),
+        Ok(Ok(None)) => {
+            tracing::warn!(
+                "Group {} not found or user {} does not own it",
+                group_id,
+                email
+            );
+            return Err(AppError::NotFound(format!(
+                "Group '{}' not found",
+                group_id
+            )));
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while verifying group ownership: {:?}", e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while verifying group ownership: {:?}", elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                update_timeout
+            )));
+        }
+    };
+
+    tracing::debug!(
+        "Current display_order: {}, target display_order: {}, nesting_level: {}",
+        current_display_order,
+        payload.display_order,
+        nesting_level
+    );
+
+    // Get neighboring groups for gap calculation
+    let neighbors_query = r#"
+        SELECT display_order
+        FROM groups 
+        WHERE user_id = $1 AND nesting_level = $2
+        ORDER BY display_order ASC
+    "#;
+
+    let all_orders = match tokio::time::timeout(
+        update_timeout,
+        sqlx::query_scalar::<_, f64>(neighbors_query)
+            .bind(&user_id)
+            .bind(&nesting_level)
+            .fetch_all(&db),
+    )
+    .await
+    {
+        Ok(Ok(orders)) => orders,
+        Ok(Err(e)) => {
+            tracing::error!("Database error while fetching neighboring groups: {:?}", e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while fetching neighboring groups: {:?}", elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                update_timeout
+            )));
+        }
+    };
+
+    // Calculate the new display_order using gap-based approach
+    let new_display_order = if all_orders.is_empty() {
+        // No other groups, use a base value
+        1000.0
+    } else if payload.display_order <= 0.0 {
+        // Moving to the beginning
+        all_orders.first().unwrap_or(&1000.0) / 2.0
+    } else if payload.display_order >= (all_orders.len() - 1) as f64 {
+        // Moving to the end
+        all_orders.last().unwrap_or(&1000.0) + 1000.0
+    } else {
+        // Moving between two items
+        let target_index = payload.display_order.min((all_orders.len() - 1) as f64) as usize;
+        let prev_order = all_orders
+            .get(target_index.saturating_sub(1))
+            .unwrap_or(&0.0);
+        let fallback = prev_order + 2000.0;
+        let next_order = all_orders.get(target_index).unwrap_or(&fallback);
+        (prev_order + next_order) / 2.0
+    };
+
+    // Ensure the new order is not too close to existing values (minimum gap of 1.0)
+    let final_display_order = new_display_order.max(0.1);
+
+    tracing::info!(
+        "Calculated new display_order: {} for group {}",
+        final_display_order,
+        group_id
+    );
+
+    // Update the display order
+    let update_query = r#"
+        UPDATE groups 
+        SET display_order = $1, updated_at = NOW() 
+        WHERE id = $2
+        RETURNING id
+    "#;
+
+    match tokio::time::timeout(
+        update_timeout,
+        sqlx::query_scalar::<_, Option<String>>(update_query)
+            .bind(&final_display_order)
+            .bind(&group_id)
+            .fetch_optional(&db),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {
+            tracing::info!(
+                "Successfully updated display order for group {} to {:.2}",
+                group_id,
+                final_display_order
+            );
+            Ok(Json(UpdateDisplayOrderResponse {
+                success: true,
+                message: format!(
+                    "Display order updated successfully to position {:.2}",
+                    final_display_order
+                ),
+            }))
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while updating display order: {:?}", e);
+            Err(AppError::from(e))
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while updating display order: {:?}", elapsed);
+            Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                update_timeout
+            )))
+        }
+    }
+}
+
+#[tracing::instrument(name = "Create new group", skip(cookies, inner))]
+pub async fn create_group(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Json(payload): Json<CreateGroupRequest>,
+) -> Result<Json<CreateGroupResponse>, AppError> {
+    tracing::info!("Starting to create new group with name: {}", payload.name);
+
+    let InnerState { db, .. } = inner;
+    let create_timeout = tokio::time::Duration::from_millis(5000);
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    tracing::debug!("Auth token length: {}", auth_token.len());
+
+    if auth_token.is_empty() {
+        tracing::warn!("Authentication failed: Missing auth token");
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    tracing::debug!("Extracting email from auth token");
+    let email = get_email_from_token(auth_token).await?;
+    tracing::info!("Successfully extracted email for user: {}", email);
+
+    // Get user ID from email
+    let user_id_query = r#"
+        SELECT id FROM users WHERE email = $1
+    "#;
+
+    let user_id = match tokio::time::timeout(
+        create_timeout,
+        sqlx::query_scalar::<_, String>(user_id_query)
+            .bind(&email)
+            .fetch_one(&db),
+    )
+    .await
+    {
+        Ok(Ok(id)) => {
+            tracing::debug!("Found user ID: {} for email: {}", id, email);
+            id
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while fetching user ID: {:?}", e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while fetching user ID: {:?}", elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                create_timeout
+            )));
+        }
+    };
+
+    // Validate parent group if provided
+    if let Some(parent_id) = &payload.parent_id {
+        let verify_parent_query = r#"
+            SELECT g.id, g.nesting_level 
+            FROM groups g 
+            INNER JOIN users u ON u.id = g.user_id 
+            WHERE g.id = $1 AND u.email = $2
+        "#;
+
+        let parent_info = match tokio::time::timeout(
+            create_timeout,
+            sqlx::query_as::<_, (String, Option<i32>)>(verify_parent_query)
+                .bind(parent_id)
+                .bind(&email)
+                .fetch_optional(&db),
+        )
+        .await
+        {
+            Ok(Ok(Some((_, nesting_level)))) => {
+                tracing::debug!(
+                    "Parent group {} validated successfully with nesting level: {:?}",
+                    parent_id,
+                    nesting_level
+                );
+                Some(nesting_level.unwrap_or(0))
+            }
+            Ok(Ok(None)) => {
+                tracing::warn!(
+                    "Parent group {} not found or user {} does not own it",
+                    parent_id,
+                    email
+                );
+                return Err(AppError::NotFound(format!(
+                    "Parent group '{}' not found",
+                    parent_id
+                )));
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Database error while validating parent group: {:?}", e);
+                return Err(AppError::from(e));
+            }
+            Err(elapsed) => {
+                tracing::error!("Timeout while validating parent group: {:?}", elapsed);
+                return Err(AppError::Database(anyhow::anyhow!(
+                    "Database query timeout after {:?}",
+                    create_timeout
+                )));
+            }
+        };
+
+        // Validate nesting level (prevent too deep nesting)
+        if let Some(parent_nesting) = parent_info {
+            if parent_nesting >= 5 {
+                tracing::warn!(
+                    "Parent group {} has maximum nesting level (5), cannot create subgroup",
+                    parent_id
+                );
+                return Err(AppError::Validation(String::from(
+                    "Maximum nesting level reached (5 levels)",
+                )));
+            }
+        }
+    }
+
+    // Generate new group ID
+    let group_id = Uuid::new_v4().to_string();
+    tracing::debug!("Generated new group ID: {} and parent ID: {:?}", group_id, payload.parent_id);
+
+    // Calculate nesting level and display order
+    let (nesting_level, display_order) = if let Some(parent_id) = &payload.parent_id {
+        // Get parent's nesting level and max display order for siblings
+        let parent_info_query = r#"
+            SELECT g.nesting_level, COALESCE(MAX(g2.display_order), 0.0) + 1.0 as next_order
+            FROM groups g
+            LEFT JOIN groups g2 ON g2.parent_id = g.id
+            WHERE g.id = $1 AND g.user_id = $2
+            GROUP BY g.nesting_level
+        "#;
+
+        match tokio::time::timeout(
+            create_timeout,
+            sqlx::query_as::<_, (Option<i32>, Option<f64>)>(parent_info_query)
+                .bind(parent_id)
+                .bind(&user_id)
+                .fetch_one(&db),
+        )
+        .await
+        {
+            Ok(Ok((parent_nesting, max_order))) => {
+                let nesting = parent_nesting.unwrap_or(0) + 1;
+                let order = max_order.unwrap_or(1.0);
+                tracing::debug!(
+                    "Calculated nesting level: {} and display order: {} for subgroup",
+                    nesting,
+                    order
+                );
+                (nesting, order)
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Database error while fetching parent info: {:?}", e);
+                return Err(AppError::from(e));
+            }
+            Err(elapsed) => {
+                tracing::error!("Timeout while fetching parent info: {:?}", elapsed);
+                return Err(AppError::Database(anyhow::anyhow!(
+                    "Database query timeout after {:?}",
+                    create_timeout
+                )));
+            }
+        }
+    } else {
+        // Top-level group
+        let max_order_query = r#"
+            SELECT COALESCE(MAX(display_order), 0.0) + 1.0 
+            FROM groups 
+            WHERE user_id = $1 AND parent_id IS NULL
+        "#;
+
+        let next_order = match tokio::time::timeout(
+            create_timeout,
+            sqlx::query_scalar::<_, Option<f64>>(max_order_query)
+                .bind(&user_id)
+                .fetch_one(&db),
+        )
+        .await
+        {
+            Ok(Ok(Some(order))) => order,
+            Ok(Ok(None)) => 1.0,
+            Ok(Err(e)) => {
+                tracing::error!("Database error while fetching max display order: {:?}", e);
+                return Err(AppError::from(e));
+            }
+            Err(elapsed) => {
+                tracing::error!("Timeout while fetching max display order: {:?}", elapsed);
+                return Err(AppError::Database(anyhow::anyhow!(
+                    "Database query timeout after {:?}",
+                    create_timeout
+                )));
+            }
+        };
+
+        tracing::debug!(
+            "Calculated display order: {} for top-level group",
+            next_order
+        );
+        (0, next_order)
+    };
+
+    // Insert the new group
+    let insert_query = r#"
+        INSERT INTO groups (id, name, icon, user_id, description, category, parent_id, nesting_level, display_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        RETURNING id, created_at, updated_at, name, icon, user_id, description, category, parent_id, nesting_level, display_order
+    "#;
+
+    let new_group = match tokio::time::timeout(
+        create_timeout,
+        sqlx::query_as::<_, Group>(insert_query)
+            .bind(&group_id)
+            .bind(&payload.name)
+            .bind(&payload.icon)
+            .bind(&user_id)
+            .bind(&payload.description)
+            .bind(&payload.category)
+            .bind(&payload.parent_id)
+            .bind(&nesting_level)
+            .bind(&display_order)
+            .fetch_one(&db),
+    )
+    .await
+    {
+        Ok(Ok(group)) => {
+            tracing::info!(
+                "Successfully created group {} with name '{}' for user {}",
+                group_id,
+                payload.name,
+                email
+            );
+            group
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while creating group: {:?}", e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while creating group: {:?}", elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                create_timeout
+            )));
+        }
+    };
+
+    Ok(Json(CreateGroupResponse {
+        success: true,
+        message: "Group created successfully".to_string(),
+        data: new_group,
+    }))
+}

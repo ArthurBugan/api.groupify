@@ -1,3 +1,4 @@
+use crate::api::common::utils::setup_auth_cookie;
 use crate::authentication::{validate_credentials, Credentials};
 use crate::errors::AppError;
 use crate::InnerState;
@@ -6,7 +7,6 @@ use axum::extract::State;
 use axum::Json;
 
 use axum_typed_multipart::TryFromMultipart;
-use cookie::time::{Duration, OffsetDateTime};
 use cookie::SameSite;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use serde::{Deserialize, Serialize};
@@ -56,24 +56,14 @@ pub async fn login_user(
     let token = generate_token(&credentials.email, &user_id)?;
     tracing::debug!("JWT token generated successfully");
 
-    let mut now = OffsetDateTime::now_utc();
-    now += Duration::days(60);
-
     tracing::debug!("Retrieving GROUPIFY_HOST environment variable");
     let domain = std::env::var("GROUPIFY_HOST").map_err(|e| {
         tracing::error!("GROUPIFY_HOST environment variable not set: {:?}", e);
         AppError::Unexpected(anyhow::anyhow!(e).context("GROUPIFY_HOST env var not set"))
     })?;
 
-    tracing::debug!("Setting up authentication cookie for domain: {}", domain);
-    let mut cookie = Cookie::new("auth-token", token);
-
-    cookie.set_domain(domain);
-    cookie.set_same_site(SameSite::None);
-    cookie.set_secure(true);
-    cookie.set_path("/");
-    cookie.set_expires(now);
-    cookies.add(cookie);
+    // Use the utility function instead of duplicated code
+    setup_auth_cookie(&token, &domain, &cookies);
 
     tracing::info!("Login completed successfully for user: {}", form.email);
     Ok(Json(json!({ "data": "login completed" })))

@@ -3,18 +3,14 @@ use crate::errors::AppError; // Added
 use crate::InnerState;
 use axum::extract::{Path, State};
 use axum::Json;
+use serde_json::{json, Value};
 use sqlx::PgPool;
-
-#[derive(serde::Deserialize)]
-pub struct Parameters {
-    subscription_token: String,
-}
 
 #[tracing::instrument(name = "Confirm a pending subscriber", skip(subscription_token, inner), fields(subscription_token_length = subscription_token.len()))]
 pub async fn confirm(
     State(inner): State<InnerState>,
     Path(subscription_token): Path<String>,
-) -> Result<Json<String>, AppError> {
+) -> Result<Json<Value>, AppError> {
     tracing::info!("Starting subscription confirmation process");
     let InnerState { db, .. } = inner;
 
@@ -26,7 +22,7 @@ pub async fn confirm(
     let user_id_string = confirm_subscriber(&db, subscriber_id).await?;
     tracing::info!("Subscription confirmed successfully for user ID: {}", user_id_string);
 
-    Ok(Json(user_id_string))
+    Ok(Json(json!({ "message": "Subscription confirmed successfully", "user_id": user_id_string })))
 }
 
 #[tracing::instrument(name = "Mark subscriber as confirmed", skip(subscriber_id, pool), fields(subscriber_id = %subscriber_id))]

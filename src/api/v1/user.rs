@@ -15,6 +15,7 @@ use tower_cookies::Cookies;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct User {
     pub id: Option<String>,
     pub aud: Option<String>,

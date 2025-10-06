@@ -12,7 +12,7 @@ use crate::InnerState;
 use crate::api::v1::channel::{all_channels, all_channels_by_group, create_channel, update_channels_in_group, fetch_youtube_channels, save_youtube_channels};
 use crate::api::v1::group::{all_groups, create_group, delete_group, update_group};
 use crate::api::v1::link_shortner::{create_link, get_link_statistics, redirect, update_link};
-use crate::api::v1::auth::{google_callback, check_google_session, google_login};
+use crate::api::v1::auth::{google_callback, check_google_session, google_login, me};
 
 use crate::api::v1::subscriptions::{subscribe};
 use crate::api::v1::subscription_confirm::{confirm};
@@ -84,5 +84,6 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
         
         // Utility routes
         .route("/language", get(get_language))
+        .route("/me", get(me))
         .with_state(state)
 }
