@@ -11,7 +11,7 @@ pub mod users;
 pub mod youtube;
 
 use axum::Router;
-use axum::routing::{get, put, post};
+use axum::routing::{get, put, post, delete};
 use tower_cookies::CookieManagerLayer;
 
 use crate::InnerState;
@@ -25,6 +25,9 @@ pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
         .route("/", get(|| async { "API V2 - Coming Soon" }))
         .route("/groups", get(groups::all_groups))
         .route("/groups", post(groups::create_group))
+        .route("/groups/:group_id", get(groups::get_group_by_id))
+        .route("/groups/:group_id", put(groups::update_group))
+        .route("/groups/:group_id", delete(groups::delete_group))
         .route("/groups/:group_id/display-order", put(groups::update_display_order))
         .layer(CookieManagerLayer::new())
         .with_state(state)

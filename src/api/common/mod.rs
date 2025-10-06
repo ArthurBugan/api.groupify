@@ -48,8 +48,6 @@ pub struct PaginationParams {
     pub search: Option<String>,
 }
 
-
-
 #[derive(Debug, Serialize)]
 pub struct PaginatedResponse<T> {
     pub data: Vec<T>,
@@ -57,6 +55,7 @@ pub struct PaginatedResponse<T> {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PaginationInfo {
     pub page: u32,
     pub limit: u32,
