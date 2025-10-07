@@ -23,7 +23,8 @@ pub struct Channel {
     pub channel_id: String,
     pub name: String,
     pub thumbnail: String,
-    pub new_content: bool,
+    pub new_content: Option<bool>,
+    pub url: Option<String>,
     pub user_id: String,
 }
 

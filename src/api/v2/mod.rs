@@ -8,16 +8,15 @@ pub mod channels;
 pub mod groups;
 pub mod subscriptions;
 pub mod users;
-pub mod youtube;
 
 use axum::Router;
-use axum::routing::{get, put, post, delete};
+use axum::routing::{delete, get, patch, post, put};
 use tower_cookies::CookieManagerLayer;
 
 use crate::InnerState;
 
 /// Creates the V2 API router
-#[tracing::instrument(name = "create_v2_router")]
+#[tracing::instrument(name = "create_v2_router", skip(state))]
 pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
     tracing::info!("Creating V2 API router");
     
@@ -29,6 +28,11 @@ pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
         .route("/groups/:group_id", put(groups::update_group))
         .route("/groups/:group_id", delete(groups::delete_group))
         .route("/groups/:group_id/display-order", put(groups::update_display_order))
+
+        .route("/channels", get(channels::all_channels))
+        .route("/channels/:channel_id", patch(channels::patch_channel))
+        .route("/channels/:channel_id/batch", patch(channels::patch_channels_batch))
+
         .layer(CookieManagerLayer::new())
         .with_state(state)
 }

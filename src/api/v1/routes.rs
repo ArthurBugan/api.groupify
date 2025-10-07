@@ -25,7 +25,7 @@ use crate::api::v1::discord_auth::{discord_callback, discord_login, check_discor
 
 
 /// Creates V1 API routes (existing routes for backward compatibility)
-#[tracing::instrument(name = "create_v1_routes")]
+#[tracing::instrument(name = "create_v1_routes", skip(state))]
 pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
     tracing::info!("Setting up V1 API routes");
 
