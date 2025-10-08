@@ -32,24 +32,24 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
     Router::new()
         // Link shortener routes
         .route("/create", post(create_link))
-        .route("/:id/statistics", get(get_link_statistics))
-        .route("/:id", patch(update_link).get(redirect))
+        .route("/{id}/statistics", get(get_link_statistics))
+        .route("/{id}", patch(update_link).get(redirect))
         
         // Channel management routes
         .route("/channels", get(all_channels))
         .route("/channel", post(create_channel))
-        .route("/channels/:group_id", get(all_channels_by_group))
-        .route("/channels/:group_id", put(update_channels_in_group))
+        .route("/channels/{group_id}", get(all_channels_by_group))
+        .route("/channels/{group_id}", put(update_channels_in_group))
         
         // Group management routes
         .route("/groups", get(all_groups))
         .route("/group", post(create_group))
-        .route("/group/:group_id", put(update_group))
-        .route("/group/:group_id", delete(delete_group))
+        .route("/group/{group_id}", put(update_group))
+        .route("/group/{group_id}", delete(delete_group))
         
         // User management routes
         .route("/registration", post(subscribe))
-        .route("/subscription/confirm/:subscription_token", post(confirm))
+        .route("/subscription/confirm/{subscription_token}", post(confirm))
         .route("/account", delete(delete_account))
         
         // Authentication routes
@@ -57,7 +57,7 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
         .route("/logout", post(logout_user))
         .route("/forget-password", post(forget_password))
         .route(
-            "/forget-password/confirm/:forget_password_token",
+            "/forget-password/confirm/{forget_password_token}",
             post(change_password),
         )
         

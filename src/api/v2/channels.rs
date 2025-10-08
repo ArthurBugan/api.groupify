@@ -4,7 +4,7 @@ use crate::api::v1::user::get_user_id_from_token;
 use crate::errors::AppError;
 use crate::InnerState;
 use anyhow::Result;
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,7 @@ pub struct PatchChannelRequest {
     pub name: Option<String>,
     pub thumbnail: Option<String>,
     pub url: Option<String>,
+    pub new_content: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,7 +126,7 @@ pub async fn all_channels(
          LEFT JOIN groups g ON g.id = c.group_id 
          WHERE u.id = $1 
          UNION ALL 
-         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url FROM youtube_channels yc 
+         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
          INNER JOIN users u ON u.id = yc.user_id 
          WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)"
     );
@@ -168,7 +169,7 @@ pub async fn all_channels(
                          LEFT JOIN groups g ON g.id = c.group_id 
                          WHERE u.id = $1 
                          UNION ALL 
-                         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url FROM youtube_channels yc 
+                         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
                          INNER JOIN users u ON u.id = yc.user_id 
                          WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                          ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -187,7 +188,7 @@ pub async fn all_channels(
                     LEFT JOIN groups g ON g.id = c.group_id 
                     WHERE u.id = $1 
                     UNION ALL 
-                    SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url FROM youtube_channels yc 
+                    SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
                     INNER JOIN users u ON u.id = yc.user_id 
                     WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                     ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -330,10 +331,15 @@ pub async fn all_channels(
 pub async fn patch_channel(
     cookies: Cookies,
     State(inner): State<InnerState>,
-    axum::extract::Path(channel_id): axum::extract::Path<String>,
+    Path(channel_id): Path<String>,
     Json(payload): Json<PatchChannelRequest>,
-) -> Result<Json<ChannelWithGroup>, AppError> {
+) -> Result<Json<ApiResponse<ChannelWithGroup>>, AppError> {
     let InnerState { db, .. } = inner;
+    tracing::info!(
+        "patch_channel: Patching channel {} with payload: {:?}",
+        channel_id,
+        payload
+    );
 
     let auth_token = cookies
         .get("auth-token")
@@ -357,17 +363,35 @@ pub async fn patch_channel(
     };
 
     // Check if the channel exists and belongs to the user
-    let existing_channel = sqlx::query_as::<_, ChannelWithGroup>(
-        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon FROM channels c LEFT JOIN groups g ON g.id = c.group_id WHERE c.id = $1 AND c.user_id = $2"
+    let existing_channel = match sqlx::query_as::<_, ChannelWithGroup>(
+        "SELECT c.*, g.name as group_name, g.icon as group_icon
+        FROM channels c
+        LEFT JOIN groups g ON g.id = c.group_id
+        WHERE c.id = $1 AND c.user_id = $2",
     )
     .bind(&channel_id)
     .bind(&user_id)
     .fetch_optional(&db)
-    .await?;
+    .await
+    {
+        Ok(channel) => channel,
+        Err(e) => {
+            tracing::error!(
+                "patch_channel: Database error while fetching existing channel {}: {:?}",
+                channel_id,
+                e
+            );
+            return Err(AppError::from(e));
+        }
+    };
 
     let updated_channel = if let Some(mut channel) = existing_channel {
         // Update existing channel
-        tracing::info!("patch_channel: Updating existing channel {} for user {}", channel_id, user_id);
+        tracing::info!(
+            "patch_channel: Updating existing channel {} for user {}",
+            channel_id,
+            user_id
+        );
         let mut query_builder: Vec<String> = Vec::new();
         let mut params: Vec<String> = Vec::new();
         let mut param_count = 1;
@@ -388,16 +412,24 @@ pub async fn patch_channel(
             param_count += 1;
         }
 
+        if let Some(new_content) = payload.new_content {
+            query_builder.push(format!("new_content = ${}", param_count));
+            params.push(new_content.to_string());
+            param_count += 1;
+        }
+
         if query_builder.is_empty() {
             return Err(AppError::Validation(String::from("No fields to update")));
         }
 
         let query_string = format!(
-            "UPDATE channels SET {} WHERE id = ${} AND user_id = ${} RETURNING id, user_id, group_id, name, channel_id, thumbnail, created_at, updated_at",
+            "UPDATE channels SET {} WHERE id = ${} AND user_id = ${} RETURNING *",
             query_builder.join(", "),
             param_count,
             param_count + 1
         );
+
+        tracing::info!("patch_channel: Executing query: {:?}", query_string);
 
         let mut query = sqlx::query_as::<_, Channel>(&query_string);
         for param in params {
@@ -435,19 +467,39 @@ pub async fn patch_channel(
             };
 
         // After successful update, fetch the channel with group info
-        let fetched_channel = sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon FROM channels c LEFT JOIN groups g ON g.id = c.group_id WHERE c.id = $1 AND c.user_id = $2"
+        let fetched_channel = match sqlx::query_as::<_, ChannelWithGroup>(
+            "SELECT c.*, g.name as group_name, g.icon as group_icon
+            FROM channels c
+            LEFT JOIN groups g ON g.id = c.group_id
+            WHERE c.id = $1 AND c.user_id = $2",
         )
         .bind(&updated_channel_base.id)
         .bind(&user_id)
         .fetch_one(&db)
-        .await?;
+        .await
+        {
+            Ok(channel) => channel,
+            Err(e) => {
+                tracing::error!(
+                    "patch_channel: Database error while fetching updated channel {}: {:?}",
+                    updated_channel_base.id.as_deref().unwrap_or_default(),
+                    e
+                );
+                return Err(AppError::from(e));
+            }
+        };
 
         fetched_channel
     } else {
         // Create new channel
         tracing::info!("patch_channel: Creating new channel with ID {}", channel_id);
-        let create_timeout = tokio::time::Duration::from_millis(5000); // 5 seconds timeout for creation
+
+        let cleaned_url = match payload.url {
+            Some(ref url) => Some(url.replace("@", "")),
+            None => None,
+        };
+
+        let create_timeout = tokio::time::Duration::from_millis(10000); // 10 seconds timeout for creation
         let new_channel = match tokio::time::timeout(
             create_timeout,
             sqlx::query_as::<_, Channel>(
@@ -460,7 +512,7 @@ pub async fn patch_channel(
             .bind(payload.thumbnail)
             .bind(format!("{}/{}", user_id, channel_id))
             .bind(false)
-            .bind(payload.url)
+            .bind(cleaned_url)
             .fetch_one(&db),
         )
         .await
@@ -493,7 +545,11 @@ pub async fn patch_channel(
 
         // After successful insertion, fetch the channel with group info
         let fetched_channel = sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon FROM channels c LEFT JOIN groups g ON g.id = c.group_id WHERE c.id = $1 AND c.user_id = $2"
+            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url
+            FROM channels c
+            LEFT JOIN groups g
+            ON g.id = c.group_id
+            WHERE c.id = $1 AND c.user_id = $2"
         )
         .bind(&new_channel.id)
         .bind(&user_id)
@@ -503,13 +559,13 @@ pub async fn patch_channel(
         fetched_channel
     };
 
-    Ok(Json(updated_channel))
+    Ok(Json(ApiResponse::success(updated_channel)))
 }
 
 #[tracing::instrument(name = "Get all channels by group ID for user", skip(inner))]
 pub async fn all_channels_by_group_id(
     State(inner): State<InnerState>,
-    axum::extract::Path(group_id): axum::extract::Path<String>,
+    Path(group_id): Path<String>,
     user_id: String,
 ) -> Result<Vec<ChannelWithGroup>, AppError> {
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
@@ -565,6 +621,7 @@ pub async fn all_channels_by_group_id(
     Ok(channels)
 }
 
+#[tracing::instrument(name = "Delete all channels by group ID for user", skip(db))]
 async fn delete_channels_by_group_id(
     db: &sqlx::PgPool,
     group_id: &str,
@@ -585,10 +642,14 @@ async fn delete_channels_by_group_id(
 pub async fn patch_channels_batch(
     cookies: Cookies,
     State(inner): State<InnerState>,
-    axum::extract::Path(group_id): axum::extract::Path<String>,
+    Path(group_id): Path<String>,
     Json(payload): Json<PatchChannelsBatchRequest>,
 ) -> Result<Json<ApiResponse<Vec<ChannelWithGroup>>>, AppError> {
-    let InnerState { db, email_client, oauth_clients } = inner;
+    let InnerState {
+        db,
+        email_client,
+        oauth_clients,
+    } = inner;
 
     let auth_token = cookies
         .get("auth-token")
@@ -617,19 +678,224 @@ pub async fn patch_channels_batch(
 
     for channel_request in payload.channels {
         let channel_id_for_patch = channel_request.id.clone();
-        let patched_channel = patch_channel(
+        let mut patched_channel = patch_channel(
             cookies.clone(),
             State(InnerState {
                 db: db.clone(),
                 email_client: email_client.clone(),
                 oauth_clients: oauth_clients.clone(),
             }),
-            axum::extract::Path(channel_id_for_patch),
+            Path(channel_id_for_patch),
             Json(channel_request),
         )
         .await?;
-        updated_channels.push(patched_channel);
+        updated_channels.push(patched_channel.data.as_mut().unwrap().clone());
     }
 
-    Ok(Json(ApiResponse::success(updated_channels.into_iter().map(|Json(c)| c).collect())))
+    Ok(Json(ApiResponse::success(updated_channels)))
+}
+
+#[tracing::instrument(name = "Get channel by ID", skip(cookies, inner))]
+pub async fn get_channel_by_id(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<ApiResponse<ChannelWithGroup>>, AppError> {
+    let start_time = std::time::Instant::now();
+    tracing::info!(
+        "Starting get_channel_by_id request for channel_id: {}",
+        channel_id
+    );
+
+    let fetch_channel_timeout = tokio::time::Duration::from_millis(5000); // 5 seconds timeout
+    let InnerState { db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        tracing::warn!("get_channel_by_id: Missing authentication token");
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = match get_user_id_from_token(auth_token).await {
+        Ok(user_id) => {
+            tracing::debug!("get_channel_by_id: Successfully extracted user_id from token");
+            user_id
+        }
+        Err(e) => {
+            tracing::error!(
+                "get_channel_by_id: Failed to extract user_id from token: {:?}",
+                e
+            );
+            return Err(e);
+        }
+    };
+
+    tracing::info!(
+        "get_channel_by_id: Fetching channel {} for user_id: {}",
+        channel_id,
+        user_id
+    );
+
+    let channel = match tokio::time::timeout(
+        fetch_channel_timeout,
+        sqlx::query_as::<_, ChannelWithGroup>(
+            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url
+             FROM channels c
+             INNER JOIN users u ON u.id = c.user_id
+             LEFT JOIN groups g ON g.id = c.group_id
+             WHERE c.id = $1 AND u.id = $2"
+        )
+        .bind(&channel_id)
+        .bind(&user_id)
+        .fetch_optional(&db),
+    )
+    .await
+    {
+        Ok(Ok(Some(channel))) => {
+            tracing::info!("get_channel_by_id: Successfully fetched channel {}", channel_id);
+            channel
+        }
+        Ok(Ok(None)) => {
+            tracing::warn!("get_channel_by_id: Channel {} not found for user {}", channel_id, user_id);
+            return Err(AppError::NotFound(format!("Channel {} not found", channel_id)));
+        }
+        Ok(Err(e)) => {
+            tracing::error!(
+                "get_channel_by_id: Database error while fetching channel {}: {:?}",
+                channel_id,
+                e
+            );
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!(
+                "get_channel_by_id: Timeout while fetching channel {}: {:?}",
+                channel_id,
+                elapsed
+            );
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                fetch_channel_timeout
+            )));
+        }
+    };
+
+    tracing::info!(
+        "Finished get_channel_by_id request for channel_id: {} in {:?}",
+        channel_id,
+        start_time.elapsed()
+    );
+
+    Ok(Json(ApiResponse::success(channel)))
+}
+
+#[tracing::instrument(name = "Delete channel by ID", skip(cookies, inner), fields(channel_id = %channel_id))]
+pub async fn delete_channel(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<ApiResponse<String>>, Json<ApiResponse<String>>> {
+    let start_time = std::time::Instant::now();
+    tracing::info!(
+        "Starting delete_channel request for channel_id: {}",
+        channel_id
+    );
+
+    let delete_channel_timeout = tokio::time::Duration::from_millis(5000); // 5 seconds timeout
+    let InnerState { db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        tracing::warn!("delete_channel: Missing authentication token");
+        return Err(Json(ApiResponse::error("Missing token".to_string())));
+    }
+
+
+
+    let user_id = match get_user_id_from_token(auth_token).await {
+        Ok(user_id) => {
+            tracing::debug!("delete_channel: Successfully extracted user_id from token");
+            user_id
+        }
+        Err(e) => {
+            tracing::error!(
+                "delete_channel: Failed to extract user_id from token: {:?}",
+                e
+            );
+            return Err(Json(ApiResponse::error(format!(
+                "Failed to extract user_id from token: {:?}",
+                e
+            ))));
+        }
+    };
+
+    tracing::info!(
+        "delete_channel: Deleting channel {} for user_id: {}",
+        channel_id,
+        user_id
+    );
+
+    let result: Result<ApiResponse<String>, ApiResponse<String>> = match tokio::time::timeout(
+        delete_channel_timeout,
+        sqlx::query!(
+            "DELETE FROM channels WHERE id = $1 AND user_id = $2",
+            &channel_id,
+            &user_id
+        )
+        .execute(&db),
+    )
+    .await
+    {
+        Ok(Ok(query_result)) => {
+            if query_result.rows_affected() == 0 {
+                tracing::warn!(
+                    "delete_channel: Channel {} not found for user {}",
+                    channel_id,
+                    user_id
+                );
+                return Err(Json(ApiResponse::error(format!(
+                    "Channel {} not found",
+                    channel_id
+                ))));
+            }
+            tracing::info!(
+                "delete_channel: Successfully deleted channel {}",
+                channel_id
+            );
+            Ok(ApiResponse::success(format!(
+                "Channel {} deleted successfully",
+                channel_id
+            )))
+        }
+        Ok(Err(e)) => {
+            tracing::error!(
+                "delete_channel: Database error while deleting channel {}: {:?}",
+                channel_id,
+                e
+            );
+            return Err(Json(ApiResponse::error(format!("Database error: {:?}", e))));
+        }
+        Err(elapsed) => {
+            tracing::error!(
+                "delete_channel: Timeout while deleting channel {}: {:?}",
+                channel_id,
+                elapsed
+            );
+
+            return Err(Json(ApiResponse::error(format!(
+                "Timeout while deleting channel {}: {:?}",
+                channel_id, elapsed
+            ))));
+        }
+    };
+
+    Ok(Json(result.unwrap()))
 }

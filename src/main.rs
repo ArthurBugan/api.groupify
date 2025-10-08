@@ -151,11 +151,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!("Building application router with versioned routes");
 
     let app = Router::new()
-        // System routes (non-versioned)
         .merge(create_system_router(app_state.db.clone()))
-        .nest("/", create_v1_routes(app_state.clone()).with_state(app_state.clone()))
-        // V2 API routes (future routes)
-        .nest("/api/v2", create_v2_router(app_state.clone()).with_state(app_state.clone()))
+        .merge(create_v1_routes(app_state.clone()).with_state(app_state.clone()))
+        .merge(create_v2_router(app_state.clone()).with_state(app_state.clone()))
         // Apply middleware layers
         .layer(cors)
         .layer(CookieManagerLayer::new())

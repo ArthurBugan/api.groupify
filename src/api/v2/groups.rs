@@ -79,6 +79,7 @@ pub struct GetGroupResponse {
 }
 
 #[tracing::instrument(name = "Get all groups for user", skip(cookies, inner))]
+#[axum::debug_handler]
 pub async fn all_groups(
     cookies: Cookies,
     State(inner): State<InnerState>,
@@ -233,7 +234,7 @@ pub async fn all_groups(
     for mut group in groups {
         let channels = all_channels_by_group_id(
             State(InnerState { db: db.clone(), email_client: inner.email_client.clone(), oauth_clients: inner.oauth_clients.clone() }),
-            axum::extract::Path(group.id.clone().unwrap_or_default()),
+            Path(group.id.clone().unwrap_or_default()),
             user_id.clone(),
         ).await?;
         group.channels = channels;
