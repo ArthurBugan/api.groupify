@@ -52,16 +52,6 @@ pub struct User {
     pub display_name: Option<String>,
 }
 
-pub trait HeaderValueExt {
-    fn to_string(&self) -> String;
-}
-
-impl HeaderValueExt for HeaderValue {
-    fn to_string(&self) -> String {
-        self.to_str().unwrap_or_default().to_string()
-    }
-}
-
 #[tracing::instrument(name = "Saving new user in the database", skip(user, transaction), err)]
 pub async fn create_user(
     transaction: &mut Transaction<'_, Postgres>,

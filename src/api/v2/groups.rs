@@ -9,7 +9,8 @@ use sqlx::FromRow;
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
-use crate::api::v1::user::get_email_from_token;
+use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
+use crate::api::v2::channels::{all_channels_by_group_id, ChannelWithGroup};
 use crate::InnerState;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -26,6 +27,10 @@ pub struct Group {
     pub parent_id: Option<String>,
     pub nesting_level: Option<i32>,
     pub display_order: Option<f64>,
+    #[sqlx(skip)]
+    pub channel_count: Option<i64>,
+    #[sqlx(skip)]
+    pub channels: Vec<ChannelWithGroup>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +79,7 @@ pub struct GetGroupResponse {
 }
 
 #[tracing::instrument(name = "Get all groups for user", skip(cookies, inner))]
+#[axum::debug_handler]
 pub async fn all_groups(
     cookies: Cookies,
     State(inner): State<InnerState>,
@@ -96,9 +102,9 @@ pub async fn all_groups(
         return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
     }
 
-    tracing::debug!("Extracting email from auth token");
-    let email = get_email_from_token(auth_token).await?;
-    tracing::info!("Successfully extracted email for user: {}", email);
+    tracing::debug!("Extracting user ID from auth token");
+    let user_id = get_user_id_from_token(auth_token).await?;
+    tracing::info!("Successfully extracted user_id for user: {}", user_id);
 
     // Set default pagination values
     let page = params.page.unwrap_or(1).max(1);
@@ -125,17 +131,19 @@ pub async fn all_groups(
 
     // Count total groups for pagination
     let count_query = format!(
-        r#"SELECT COUNT(*) as total 
+        r#"SELECT COUNT(DISTINCT g.id) as total 
            FROM groups g 
            INNER JOIN users u ON u.id = g.user_id 
-           WHERE u.email = $1 {}"#,
+           LEFT JOIN channels c ON c.group_id = g.id
+           WHERE u.id = $1 {} 
+           "#,
         search_condition
     );
 
     let total_result = match tokio::time::timeout(
         fetch_groups_timeout,
         sqlx::query_scalar::<_, i64>(&count_query)
-            .bind(&email)
+            .bind(&user_id)
             .fetch_one(&db),
     )
     .await
@@ -144,7 +152,7 @@ pub async fn all_groups(
         Ok(Err(e)) => {
             tracing::error!(
                 "Database error while counting groups for user {}: {:?}",
-                email,
+                user_id,
                 e
             );
             return Err(AppError::from(e));
@@ -152,7 +160,7 @@ pub async fn all_groups(
         Err(elapsed) => {
             tracing::error!(
                 "Timeout elapsed while counting groups for user {}: {:?}",
-                email,
+                user_id,
                 elapsed
             );
             return Err(AppError::Database(anyhow::anyhow!(
@@ -171,10 +179,11 @@ pub async fn all_groups(
 
     // Fetch paginated groups
     let groups_query = format!(
-        r#"SELECT g.*, g.id as id, g.created_at as created_at, g.updated_at as updated_at 
+        r#"SELECT g.*, 
+           (SELECT COUNT(*) FROM channels WHERE group_id = g.id) as channel_count
            FROM groups g 
            INNER JOIN users u ON u.id = g.user_id 
-           WHERE u.email = $1 {} 
+           WHERE u.id = $1 {} 
            ORDER BY g.nesting_level ASC, g.display_order ASC, g.name ASC
            LIMIT $2 OFFSET $3"#,
         search_condition
@@ -184,7 +193,7 @@ pub async fn all_groups(
     let groups = match tokio::time::timeout(
         fetch_groups_timeout,
         sqlx::query_as::<_, Group>(&groups_query)
-            .bind(&email)
+            .bind(&user_id)
             .bind(limit as i64)
             .bind(offset as i64)
             .fetch_all(&db),
@@ -195,14 +204,14 @@ pub async fn all_groups(
             tracing::info!(
                 "Successfully fetched {} groups for user: {}",
                 groups.len(),
-                email
+                user_id
             );
             groups
         }
         Ok(Err(e)) => {
             tracing::error!(
                 "Database error while fetching groups for user {}: {:?}",
-                email,
+                user_id,
                 e
             );
             return Err(AppError::from(e));
@@ -210,7 +219,7 @@ pub async fn all_groups(
         Err(elapsed) => {
             tracing::error!(
                 "Timeout elapsed while fetching groups for user {}: {:?}",
-                email,
+                user_id,
                 elapsed
             );
             return Err(AppError::Database(anyhow::anyhow!(
@@ -219,6 +228,19 @@ pub async fn all_groups(
             )));
         }
     };
+
+    let mut groups_with_channels: Vec<Group> = Vec::new();
+
+    for mut group in groups {
+        let channels = all_channels_by_group_id(
+            State(InnerState { db: db.clone(), email_client: inner.email_client.clone(), oauth_clients: inner.oauth_clients.clone() }),
+            Path(group.id.clone().unwrap_or_default()),
+            user_id.clone(),
+        ).await?;
+        group.channels = channels;
+        group.channel_count = Some(group.channels.len() as i64);
+        groups_with_channels.push(group);
+    }
 
     let pagination_info = PaginationInfo {
         page,
@@ -230,7 +252,7 @@ pub async fn all_groups(
     };
 
     let response = PaginatedResponse {
-        data: groups,
+        data: groups_with_channels,
         pagination: pagination_info,
     };
 
@@ -483,38 +505,8 @@ pub async fn create_group(
     }
 
     tracing::debug!("Extracting email from auth token");
-    let email = get_email_from_token(auth_token).await?;
-    tracing::info!("Successfully extracted email for user: {}", email);
-
-    // Get user ID from email
-    let user_id_query = r#"
-        SELECT id FROM users WHERE email = $1
-    "#;
-
-    let user_id = match tokio::time::timeout(
-        create_timeout,
-        sqlx::query_scalar::<_, String>(user_id_query)
-            .bind(&email)
-            .fetch_one(&db),
-    )
-    .await
-    {
-        Ok(Ok(id)) => {
-            tracing::debug!("Found user ID: {} for email: {}", id, email);
-            id
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Database error while fetching user ID: {:?}", e);
-            return Err(AppError::from(e));
-        }
-        Err(elapsed) => {
-            tracing::error!("Timeout while fetching user ID: {:?}", elapsed);
-            return Err(AppError::Database(anyhow::anyhow!(
-                "Database query timeout after {:?}",
-                create_timeout
-            )));
-        }
-    };
+    let user_id = get_user_id_from_token(auth_token).await?;
+    tracing::info!("Successfully extracted user_id for user: {}", user_id);
 
     // Validate parent group if provided
     if let Some(parent_id) = &payload.parent_id {
@@ -522,14 +514,14 @@ pub async fn create_group(
             SELECT g.id, g.nesting_level 
             FROM groups g 
             INNER JOIN users u ON u.id = g.user_id 
-            WHERE g.id = $1 AND u.email = $2
+            WHERE g.id = $1 AND u.id = $2
         "#;
 
         let parent_info = match tokio::time::timeout(
             create_timeout,
             sqlx::query_as::<_, (String, Option<i32>)>(verify_parent_query)
                 .bind(parent_id)
-                .bind(&email)
+                .bind(&user_id)
                 .fetch_optional(&db),
         )
         .await
@@ -546,7 +538,7 @@ pub async fn create_group(
                 tracing::warn!(
                     "Parent group {} not found or user {} does not own it",
                     parent_id,
-                    email
+                    user_id
                 );
                 return Err(AppError::NotFound(format!(
                     "Parent group '{}' not found",
@@ -582,7 +574,11 @@ pub async fn create_group(
 
     // Generate new group ID
     let group_id = Uuid::new_v4().to_string();
-    tracing::debug!("Generated new group ID: {} and parent ID: {:?}", group_id, payload.parent_id);
+    tracing::debug!(
+        "Generated new group ID: {} and parent ID: {:?}",
+        group_id,
+        payload.parent_id
+    );
 
     // Calculate nesting level and display order
     let (nesting_level, display_order) = if let Some(parent_id) = &payload.parent_id {
@@ -689,10 +685,10 @@ pub async fn create_group(
     {
         Ok(Ok(group)) => {
             tracing::info!(
-                "Successfully created group {} with name '{}' for user {}",
+                "Successfully created group {} with name '{}' for user_id {}",
                 group_id,
                 payload.name,
-                email
+                user_id
             );
             group
         }
@@ -727,7 +723,7 @@ pub async fn delete_group(
     Path(group_id): Path<String>,
 ) -> Result<Json<UpdateDisplayOrderResponse>, AppError> {
     tracing::info!("Starting to delete group with cascade: {}", group_id);
-    
+
     let InnerState { db, .. } = inner;
     let delete_timeout = tokio::time::Duration::from_millis(10000);
 
@@ -805,8 +801,15 @@ pub async fn delete_group(
     };
 
     if !group_exists {
-        tracing::warn!("Group {} not found or user {} does not own it", group_id, email);
-        return Err(AppError::NotFound(format!("Group '{}' not found", group_id)));
+        tracing::warn!(
+            "Group {} not found or user {} does not own it",
+            group_id,
+            email
+        );
+        return Err(AppError::NotFound(format!(
+            "Group '{}' not found",
+            group_id
+        )));
     }
 
     // Get all child groups recursively using CTE
@@ -832,7 +835,11 @@ pub async fn delete_group(
     .await
     {
         Ok(Ok(ids)) => {
-            tracing::info!("Found {} child groups to delete for group {}", ids.len(), group_id);
+            tracing::info!(
+                "Found {} child groups to delete for group {}",
+                ids.len(),
+                group_id
+            );
             ids
         }
         Ok(Err(e)) => {
@@ -855,30 +862,24 @@ pub async fn delete_group(
             .map(|_| "$3")
             .collect::<Vec<_>>()
             .join(",");
-        
+
         let delete_children_query = format!(
             r#"DELETE FROM groups WHERE id IN ({}) AND user_id = $1"#,
             child_ids_placeholder
         );
 
-        let mut delete_children = sqlx::query(&delete_children_query)
-            .bind(&user_id);
+        let mut delete_children = sqlx::query(&delete_children_query).bind(&user_id);
 
         // Bind all child IDs
         for child_id in &child_group_ids {
             delete_children = delete_children.bind(child_id);
         }
 
-        match tokio::time::timeout(
-            delete_timeout,
-            delete_children.execute(&db),
-        )
-        .await
-        {
+        match tokio::time::timeout(delete_timeout, delete_children.execute(&db)).await {
             Ok(Ok(result)) => {
                 tracing::info!(
-                    "Successfully deleted {} child groups for group {}", 
-                    result.rows_affected(), 
+                    "Successfully deleted {} child groups for group {}",
+                    result.rows_affected(),
                     group_id
                 );
             }
@@ -928,7 +929,10 @@ pub async fn delete_group(
                 }))
             } else {
                 tracing::warn!("Group {} not found or already deleted", group_id);
-                Err(AppError::NotFound(format!("Group '{}' not found", group_id)))
+                Err(AppError::NotFound(format!(
+                    "Group '{}' not found",
+                    group_id
+                )))
             }
         }
         Ok(Err(e)) => {
@@ -968,24 +972,28 @@ pub async fn get_group_by_id(
         return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
     }
 
-    tracing::debug!("Extracting email from auth token");
-    let email = get_email_from_token(auth_token).await?;
-    tracing::info!("Successfully extracted email for user: {}", email);
+    tracing::debug!("Extracting user ID from auth token");
+    let user_id = get_user_id_from_token(auth_token.clone()).await?;
+    tracing::info!("Successfully extracted user ID for user: {}", user_id);
 
     // Query to get the group by ID and verify user ownership
     let group_query = r#"
-        SELECT g.*, g.id as id, g.created_at as created_at, g.updated_at as updated_at 
-        FROM groups g 
-        INNER JOIN users u ON u.id = g.user_id 
-        WHERE g.id = $1 AND u.email = $2
+        SELECT 
+            g.*
+        FROM 
+            groups g
+        INNER JOIN 
+            users u ON u.id = g.user_id 
+        WHERE 
+            g.id = $1 AND u.id = $2
     "#;
 
     tracing::debug!("Executing database query to fetch group by ID");
-    let group = match tokio::time::timeout(
+    let mut group = match tokio::time::timeout(
         fetch_timeout,
         sqlx::query_as::<_, Group>(group_query)
             .bind(&group_id)
-            .bind(&email)
+            .bind(&user_id)
             .fetch_optional(&db),
     )
     .await
@@ -994,7 +1002,7 @@ pub async fn get_group_by_id(
             tracing::info!(
                 "Successfully fetched group {} for user: {}",
                 group_id,
-                email
+                user_id
             );
             group
         }
@@ -1002,7 +1010,7 @@ pub async fn get_group_by_id(
             tracing::warn!(
                 "Group {} not found or user {} does not own it",
                 group_id,
-                email
+                user_id
             );
             return Err(AppError::NotFound(format!(
                 "Group '{}' not found",
@@ -1013,7 +1021,7 @@ pub async fn get_group_by_id(
             tracing::error!(
                 "Database error while fetching group {} for user {}: {:?}",
                 group_id,
-                email,
+                user_id,
                 e
             );
             return Err(AppError::from(e));
@@ -1022,7 +1030,7 @@ pub async fn get_group_by_id(
             tracing::error!(
                 "Timeout while fetching group {} for user {}: {:?}",
                 group_id,
-                email,
+                user_id,
                 elapsed
             );
             return Err(AppError::Database(anyhow::anyhow!(
@@ -1032,11 +1040,55 @@ pub async fn get_group_by_id(
         }
     };
 
-    Ok(Json(GetGroupResponse {
-        success: true,
-        message: "Group retrieved successfully".to_string(),
-        data: group,
-    }))
+    let channels_query = r#"
+        SELECT 
+            c.*,
+            g.name as group_name, g.icon as group_icon
+        FROM 
+            channels c
+        LEFT JOIN
+            groups g ON c.group_id = g.id
+        WHERE 
+            c.group_id = $1 AND c.user_id = $2
+        ORDER BY c.name ASC
+    "#;
+
+    tracing::debug!("Executing database query to fetch channels for group {}", group_id);
+    let channels = match tokio::time::timeout(
+        fetch_timeout,
+        sqlx::query_as::<_, ChannelWithGroup>(channels_query)
+            .bind(&group_id)
+            .bind(&user_id)
+            .fetch_all(&db),
+    )
+    .await
+    {
+        Ok(Ok(channels)) => {
+            tracing::info!("Successfully fetched {} channels for group {}", channels.len(), group_id);
+            channels
+        }
+        Ok(Err(e)) => {
+            tracing::error!("Database error while fetching channels for group {}: {:?}", group_id, e);
+            return Err(AppError::from(e));
+        }
+        Err(elapsed) => {
+            tracing::error!("Timeout while fetching channels for group {}: {:?}", group_id, elapsed);
+            return Err(AppError::Database(anyhow::anyhow!(
+                "Database query timeout after {:?}",
+                fetch_timeout
+            )));
+        }
+    };
+
+    group.channels = channels;
+    group.channel_count = Some(group.channels.len() as i64);
+
+    tracing::debug!(
+        "Returning group {} with {:?} channels to client",
+        group_id,
+        group.channel_count
+    );
+    Ok(Json(GetGroupResponse { success: true, message: "Group fetched successfully".to_string(), data: group }))
 }
 
 #[tracing::instrument(
@@ -1051,7 +1103,7 @@ pub async fn update_group(
     Json(payload): Json<UpdateGroupRequest>,
 ) -> Result<Json<CreateGroupResponse>, AppError> {
     tracing::info!("Starting to update group ID: {}", group_id);
-    
+
     let InnerState { db, .. } = inner;
     let update_timeout = tokio::time::Duration::from_millis(10000);
 
@@ -1066,38 +1118,11 @@ pub async fn update_group(
     }
 
     tracing::debug!("Extracting email from auth token");
-    let email = get_email_from_token(auth_token).await?;
+    let email = get_email_from_token(auth_token.clone()).await?;
     tracing::info!("Updating group {} for user: {}", group_id, email);
 
-    // Get user ID first
-    let user_id_query = r#"
-        SELECT id FROM users WHERE email = $1
-    "#;
-
-    let user_id = match tokio::time::timeout(
-        update_timeout,
-        sqlx::query_scalar::<_, String>(user_id_query)
-            .bind(&email)
-            .fetch_one(&db),
-    )
-    .await
-    {
-        Ok(Ok(id)) => {
-            tracing::debug!("Found user ID: {} for email: {}", id, email);
-            id
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Database error while fetching user ID: {:?}", e);
-            return Err(AppError::from(e));
-        }
-        Err(elapsed) => {
-            tracing::error!("Timeout while fetching user ID: {:?}", elapsed);
-            return Err(AppError::Database(anyhow::anyhow!(
-                "Database query timeout after {:?}",
-                update_timeout
-            )));
-        }
-    };
+    let user_id = get_user_id_from_token(auth_token.clone()).await?;
+    tracing::info!("Successfully extracted user ID for user: {}", user_id);
 
     // Verify the user owns this group
     let verify_query = r#"
@@ -1129,8 +1154,15 @@ pub async fn update_group(
     };
 
     if !group_exists {
-        tracing::warn!("Group {} not found or user {} does not own it", group_id, email);
-        return Err(AppError::NotFound(format!("Group '{}' not found", group_id)));
+        tracing::warn!(
+            "Group {} not found or user {} does not own it",
+            group_id,
+            email
+        );
+        return Err(AppError::NotFound(format!(
+            "Group '{}' not found",
+            group_id
+        )));
     }
 
     // Validate parent group if provided
