@@ -1,9 +1,32 @@
--- Add up migration script here
-create table if not exists crunchyroll_channels
-(
-    id text not null primary key,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    name text not null,
-    thumbnail text not null
+CREATE TABLE if not exists crunchyroll_channels (
+  id TEXT PRIMARY KEY,
+  external_id TEXT,
+  slug_title TEXT,
+  title TEXT,
+  description TEXT,
+  promo_title TEXT,
+  promo_description TEXT,
+  last_public TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  type TEXT,
+  channel_id TEXT,
+  new BOOLEAN,
+  average_rating FLOAT8 DEFAULT 0,
+  total_ratings INTEGER,
+  poster_image_url TEXT,
+  wide_image_url TEXT,
+  audio_locales TEXT[],
+  subtitle_locales TEXT[],
+  content_descriptors TEXT[],
+  maturity_ratings TEXT[],
+  extended_maturity_level TEXT,
+  extended_maturity_rating TEXT,
+  rating_system TEXT,
+  episode_count INTEGER,
+  season_count INTEGER,
+  launch_year INTEGER,
+  is_dubbed BOOLEAN,
+  is_subbed BOOLEAN,
+  is_mature BOOLEAN,
+  is_simulcast BOOLEAN,
+  tenant_categories TEXT[]
 );

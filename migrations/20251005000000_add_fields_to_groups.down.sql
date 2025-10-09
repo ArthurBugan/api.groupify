@@ -10,3 +10,4 @@ DROP INDEX IF EXISTS idx_groups_display_order;
 
 ALTER TABLE channels
 DROP COLUMN IF EXISTS url;
+DROP COLUMN IF EXISTS content_type;

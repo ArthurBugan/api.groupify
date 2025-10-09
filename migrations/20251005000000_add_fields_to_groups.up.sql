@@ -9,4 +9,5 @@ ADD COLUMN IF NOT EXISTS parent_id TEXT REFERENCES groups(id);
 CREATE INDEX IF NOT EXISTS idx_groups_display_order ON groups(display_order);
 
 ALTER TABLE channels
+ADD COLUMN IF NOT EXISTS content_type TEXT,
 ADD COLUMN IF NOT EXISTS url TEXT;

@@ -2,6 +2,8 @@ use time::OffsetDateTime;
 use cookie::{Cookie, SameSite};
 use tower_cookies::Cookies;
 
+use crate::errors::AppError;
+
 pub fn setup_auth_cookie(token: &str, domain: &str, cookies: &Cookies) {
     let mut cookie = Cookie::new("auth-token", token.to_string());
 
@@ -35,4 +37,18 @@ pub fn setup_auth_cookie(token: &str, domain: &str, cookies: &Cookies) {
     cookie.set_expires(now);
     cookie.set_http_only(true);
     cookies.add(cookie);
+}
+
+pub async fn timeout_query<T, F>(duration: std::time::Duration, fut: F) -> Result<T, AppError>
+where
+    F: std::future::Future<Output = Result<T, sqlx::Error>>,
+{
+    match tokio::time::timeout(duration, fut).await {
+        Ok(Ok(res)) => Ok(res),
+        Ok(Err(e)) => Err(AppError::from(e)),
+        Err(_) => Err(AppError::Database(anyhow::anyhow!(
+            "Query timeout after {:?}",
+            duration
+        ))),
+    }
 }

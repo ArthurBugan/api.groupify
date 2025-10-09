@@ -1040,10 +1040,9 @@ pub async fn get_group_by_id(
         }
     };
 
-    // Fetch channels for this group
     let channels_query = r#"
         SELECT 
-            c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, c.url,
+            c.*,
             g.name as group_name, g.icon as group_icon
         FROM 
             channels c

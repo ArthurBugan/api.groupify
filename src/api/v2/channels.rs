@@ -1,3 +1,4 @@
+use crate::api::common::utils::timeout_query;
 use crate::api::common::ApiResponse;
 use crate::api::v1::channel::Channel;
 use crate::api::v1::user::get_user_id_from_token;
@@ -8,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
+use sqlx::{Execute, FromRow, Postgres, QueryBuilder};
 use tower_cookies::Cookies;
 
 /// Pagination parameters for channel queries
@@ -49,6 +50,7 @@ pub struct ChannelWithGroup {
     pub updated_at: NaiveDateTime,
     pub group_name: Option<String>,
     pub group_icon: Option<String>,
+    pub content_type: Option<String>,
     pub url: Option<String>,
 }
 
@@ -60,6 +62,7 @@ pub struct PatchChannelRequest {
     pub name: Option<String>,
     pub thumbnail: Option<String>,
     pub url: Option<String>,
+    pub content_type: Option<String>,
     pub new_content: Option<bool>,
 }
 
@@ -121,12 +124,12 @@ pub async fn all_channels(
 
     // Build the base query
     let mut base_query = String::from(
-        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url FROM channels c 
+        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
          INNER JOIN users u ON u.id = c.user_id 
          LEFT JOIN groups g ON g.id = c.group_id 
-         WHERE u.id = $1 
+         WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
          UNION ALL 
-         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
+         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
          INNER JOIN users u ON u.id = yc.user_id 
          WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)"
     );
@@ -164,12 +167,12 @@ pub async fn all_channels(
                 } else {
                     // No search parameter, use combined query
                     sqlx::query_as::<_, ChannelWithGroup>(
-                        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url FROM channels c 
+                        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url, c.content_type as content_type FROM channels c 
                          INNER JOIN users u ON u.id = c.user_id 
                          LEFT JOIN groups g ON g.id = c.group_id 
-                         WHERE u.id = $1 
+                         WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
                          UNION ALL 
-                         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
+                         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
                          INNER JOIN users u ON u.id = yc.user_id 
                          WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                          ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -183,12 +186,12 @@ pub async fn all_channels(
             } else {
                 // No search parameter
                 sqlx::query_as::<_, ChannelWithGroup>(
-                    "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url FROM channels c 
+                    "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
                     INNER JOIN users u ON u.id = c.user_id 
                     LEFT JOIN groups g ON g.id = c.group_id 
-                    WHERE u.id = $1 
+                    WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1  
                     UNION ALL 
-                    SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url FROM youtube_channels yc 
+                    SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
                     INNER JOIN users u ON u.id = yc.user_id 
                     WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                     ORDER BY created_at DESC LIMIT $2 OFFSET $3"
@@ -238,12 +241,12 @@ pub async fn all_channels(
                     let search_pattern = format!("%{}%", search.trim());
                     sqlx::query_scalar::<_, i64>(
                         "SELECT COUNT(*) FROM (
-                            SELECT c.id, c.name, g.name as group_name FROM channels c 
+                            SELECT c.id, c.name, g.name as group_name, c.content_type as content_type FROM channels c 
                             INNER JOIN users u ON u.id = c.user_id 
                             LEFT JOIN groups g ON g.id = c.group_id 
-                            WHERE u.id = $1 
+                            WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
                             UNION ALL 
-                            SELECT yc.id, yc.name, NULL as group_name FROM youtube_channels yc 
+                            SELECT yc.id, yc.name, NULL as group_name, 'youtube' as content_type FROM youtube_channels yc 
                             INNER JOIN users u ON u.id = yc.user_id 
                             WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                         ) AS combined_channels 
@@ -270,7 +273,7 @@ pub async fn all_channels(
                         SELECT c.id FROM channels c 
                         INNER JOIN users u ON u.id = c.user_id 
                         LEFT JOIN groups g ON g.id = c.group_id 
-                        WHERE u.id = $1 
+                        WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
                         UNION ALL 
                         SELECT yc.id FROM youtube_channels yc 
                         INNER JOIN users u ON u.id = yc.user_id 
@@ -392,79 +395,48 @@ pub async fn patch_channel(
             channel_id,
             user_id
         );
-        let mut query_builder: Vec<String> = Vec::new();
-        let mut params: Vec<String> = Vec::new();
-        let mut param_count = 1;
+
+        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new("UPDATE channels SET ");
+
+        let mut separated = builder.separated(", ");
 
         if let Some(group_id) = payload.group_id {
-            query_builder.push(format!("group_id = ${}", param_count));
-            params.push(group_id);
-            param_count += 1;
+            separated.push("group_id = ");
+            separated.push_bind(group_id);
         }
         if let Some(name) = payload.name {
-            query_builder.push(format!("name = ${}", param_count));
-            params.push(name);
-            param_count += 1;
+            separated.push("name = ");
+            separated.push_bind(name);
         }
         if let Some(thumbnail) = payload.thumbnail {
-            query_builder.push(format!("thumbnail = ${}", param_count));
-            params.push(thumbnail);
-            param_count += 1;
+            separated.push("thumbnail = ");
+            separated.push_bind(thumbnail);
         }
-
         if let Some(new_content) = payload.new_content {
-            query_builder.push(format!("new_content = ${}", param_count));
-            params.push(new_content.to_string());
-            param_count += 1;
+            separated.push("new_content = ");
+            separated.push_bind(new_content);
+        }
+        if let Some(content_type) = payload.content_type {
+            separated.push("content_type = ");
+            separated.push_bind(content_type);
         }
 
-        if query_builder.is_empty() {
-            return Err(AppError::Validation(String::from("No fields to update")));
-        }
+        // Add WHERE clause
+        builder.push(" WHERE id = ");
+        builder.push_bind(&channel_id);
+        builder.push(" AND user_id = ");
+        builder.push_bind(&user_id);
+        builder.push(" RETURNING *");
 
-        let query_string = format!(
-            "UPDATE channels SET {} WHERE id = ${} AND user_id = ${} RETURNING *",
-            query_builder.join(", "),
-            param_count,
-            param_count + 1
-        );
+        let query = builder.build_query_as::<Channel>();
 
-        tracing::info!("patch_channel: Executing query: {:?}", query_string);
+        let update_timeout = tokio::time::Duration::from_millis(5000);
 
-        let mut query = sqlx::query_as::<_, Channel>(&query_string);
-        for param in params {
-            query = query.bind(param);
-        }
-        query = query.bind(&channel_id).bind(&user_id);
+        tracing::debug!("patch_channel: Executing update query: {:?}", query.sql());
 
-        let update_timeout = tokio::time::Duration::from_millis(5000); // 5 seconds timeout for update
-        let updated_channel_base =
-            match tokio::time::timeout(update_timeout, query.fetch_one(&db)).await {
-                Ok(Ok(channel)) => {
-                    tracing::debug!(
-                        "patch_channel: Successfully updated channel with ID: {}",
-                        channel.id.as_deref().unwrap_or_default()
-                    );
-                    channel
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(
-                        "patch_channel: Database error while updating channel: {:?}",
-                        e
-                    );
-                    return Err(AppError::from(e));
-                }
-                Err(elapsed) => {
-                    tracing::error!(
-                        "patch_channel: Timeout while updating channel: {:?}",
-                        elapsed
-                    );
-                    return Err(AppError::Database(anyhow::anyhow!(
-                        "Database query timeout after {:?}",
-                        update_timeout
-                    )));
-                }
-            };
+        let updated_channel: Channel = timeout_query(update_timeout, query.fetch_one(&db))
+            .await
+            .inspect_err(|e| tracing::error!("patch_channel: Database error: {:?}", e))?;
 
         // After successful update, fetch the channel with group info
         let fetched_channel = match sqlx::query_as::<_, ChannelWithGroup>(
@@ -473,7 +445,7 @@ pub async fn patch_channel(
             LEFT JOIN groups g ON g.id = c.group_id
             WHERE c.id = $1 AND c.user_id = $2",
         )
-        .bind(&updated_channel_base.id)
+        .bind(&updated_channel.id)
         .bind(&user_id)
         .fetch_one(&db)
         .await
@@ -482,7 +454,7 @@ pub async fn patch_channel(
             Err(e) => {
                 tracing::error!(
                     "patch_channel: Database error while fetching updated channel {}: {:?}",
-                    updated_channel_base.id.as_deref().unwrap_or_default(),
+                    updated_channel.id.as_deref().unwrap_or_default(),
                     e
                 );
                 return Err(AppError::from(e));
@@ -503,7 +475,7 @@ pub async fn patch_channel(
         let new_channel = match tokio::time::timeout(
             create_timeout,
             sqlx::query_as::<_, Channel>(
-                "INSERT INTO channels (id, user_id, group_id, name, thumbnail, channel_id, new_content, url) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *"
+                "INSERT INTO channels (id, user_id, group_id, name, thumbnail, channel_id, new_content, url, content_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *"
             )
             .bind(&channel_id)
             .bind(&user_id)
@@ -513,6 +485,7 @@ pub async fn patch_channel(
             .bind(format!("{}/{}", user_id, channel_id))
             .bind(false)
             .bind(cleaned_url)
+            .bind(payload.content_type)
             .fetch_one(&db),
         )
         .await
@@ -545,11 +518,11 @@ pub async fn patch_channel(
 
         // After successful insertion, fetch the channel with group info
         let fetched_channel = sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url
+            "SELECT c.*, g.name as group_name, g.icon as group_icon
             FROM channels c
             LEFT JOIN groups g
             ON g.id = c.group_id
-            WHERE c.id = $1 AND c.user_id = $2"
+            WHERE c.id = $1 AND c.user_id = $2",
         )
         .bind(&new_channel.id)
         .bind(&user_id)
@@ -580,7 +553,7 @@ pub async fn all_channels_by_group_id(
     let channels = match tokio::time::timeout(
         fetch_channels_timeout,
         sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url FROM channels c INNER JOIN users u ON u.id = c.user_id LEFT JOIN groups g ON g.id = c.group_id WHERE u.id = $1 AND c.group_id = $2 ORDER BY c.created_at DESC"
+            "SELECT c.*, g.name as group_name, g.icon as group_icon FROM channels c INNER JOIN users u ON u.id = c.user_id LEFT JOIN groups g ON g.id = c.group_id WHERE u.id = $1 AND c.group_id = $2 ORDER BY c.created_at DESC"
         )
         .bind(&user_id)
         .bind(&group_id)
@@ -743,11 +716,11 @@ pub async fn get_channel_by_id(
     let channel = match tokio::time::timeout(
         fetch_channel_timeout,
         sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url
+            "SELECT c.*, g.name as group_name, g.icon as group_icon
              FROM channels c
              INNER JOIN users u ON u.id = c.user_id
              LEFT JOIN groups g ON g.id = c.group_id
-             WHERE c.id = $1 AND u.id = $2"
+             WHERE c.id = $1 AND u.id = $2",
         )
         .bind(&channel_id)
         .bind(&user_id)
@@ -756,12 +729,22 @@ pub async fn get_channel_by_id(
     .await
     {
         Ok(Ok(Some(channel))) => {
-            tracing::info!("get_channel_by_id: Successfully fetched channel {}", channel_id);
+            tracing::info!(
+                "get_channel_by_id: Successfully fetched channel {}",
+                channel_id
+            );
             channel
         }
         Ok(Ok(None)) => {
-            tracing::warn!("get_channel_by_id: Channel {} not found for user {}", channel_id, user_id);
-            return Err(AppError::NotFound(format!("Channel {} not found", channel_id)));
+            tracing::warn!(
+                "get_channel_by_id: Channel {} not found for user {}",
+                channel_id,
+                user_id
+            );
+            return Err(AppError::NotFound(format!(
+                "Channel {} not found",
+                channel_id
+            )));
         }
         Ok(Err(e)) => {
             tracing::error!(
@@ -817,8 +800,6 @@ pub async fn delete_channel(
         tracing::warn!("delete_channel: Missing authentication token");
         return Err(Json(ApiResponse::error("Missing token".to_string())));
     }
-
-
 
     let user_id = match get_user_id_from_token(auth_token).await {
         Ok(user_id) => {
