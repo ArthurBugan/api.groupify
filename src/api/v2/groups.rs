@@ -10,7 +10,7 @@ use tower_cookies::Cookies;
 use uuid::Uuid;
 
 use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
-use crate::api::v2::channels::{all_channels_by_group_id, ChannelWithGroup};
+use crate::api::v2::channels::{all_channels_by_group_id, all_count_by_channel_id, ChannelWithGroup};
 use crate::InnerState;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -232,13 +232,15 @@ pub async fn all_groups(
     let mut groups_with_channels: Vec<Group> = Vec::new();
 
     for mut group in groups {
-        let channels = all_channels_by_group_id(
-            State(InnerState { db: db.clone(), email_client: inner.email_client.clone(), oauth_clients: inner.oauth_clients.clone() }),
-            Path(group.id.clone().unwrap_or_default()),
-            user_id.clone(),
+        let channel_count = all_count_by_channel_id(
+            &db,
+            &group.id.clone().unwrap_or_default(),
+            &user_id.clone(),
         ).await?;
-        group.channels = channels;
-        group.channel_count = Some(group.channels.len() as i64);
+
+        tracing::debug!("Channel count for group {}: {}", group.id.clone().unwrap_or_default(), channel_count);
+        group.channels = Vec::new();
+        group.channel_count = Some(channel_count as i64);
         groups_with_channels.push(group);
     }
 
@@ -957,7 +959,7 @@ pub async fn get_group_by_id(
 ) -> Result<Json<GetGroupResponse>, AppError> {
     tracing::info!("Starting to fetch group by ID: {}", group_id);
 
-    let InnerState { db, .. } = inner;
+    let InnerState { db, .. } = inner.clone();
     let fetch_timeout = tokio::time::Duration::from_millis(5000);
 
     let auth_token = cookies
@@ -1040,45 +1042,11 @@ pub async fn get_group_by_id(
         }
     };
 
-    let channels_query = r#"
-        SELECT 
-            c.*,
-            g.name as group_name, g.icon as group_icon
-        FROM 
-            channels c
-        LEFT JOIN
-            groups g ON c.group_id = g.id
-        WHERE 
-            c.group_id = $1 AND c.user_id = $2
-        ORDER BY c.name ASC
-    "#;
-
-    tracing::debug!("Executing database query to fetch channels for group {}", group_id);
-    let channels = match tokio::time::timeout(
-        fetch_timeout,
-        sqlx::query_as::<_, ChannelWithGroup>(channels_query)
-            .bind(&group_id)
-            .bind(&user_id)
-            .fetch_all(&db),
-    )
-    .await
-    {
-        Ok(Ok(channels)) => {
-            tracing::info!("Successfully fetched {} channels for group {}", channels.len(), group_id);
-            channels
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Database error while fetching channels for group {}: {:?}", group_id, e);
-            return Err(AppError::from(e));
-        }
-        Err(elapsed) => {
-            tracing::error!("Timeout while fetching channels for group {}: {:?}", group_id, elapsed);
-            return Err(AppError::Database(anyhow::anyhow!(
-                "Database query timeout after {:?}",
-                fetch_timeout
-            )));
-        }
-    };
+    let channels = all_channels_by_group_id(
+        State(inner.clone()),
+        Path(group_id.clone()),
+        user_id.clone(),
+    ).await?;
 
     group.channels = channels;
     group.channel_count = Some(group.channels.len() as i64);

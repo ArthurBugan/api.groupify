@@ -108,7 +108,7 @@ pub async fn sync_channels_from_youtube(
 
     tracing::debug!("Querying session information from database");
     let bearer = sqlx::query(
-        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
+        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1) and provider = 'google'",
     )
     .bind(email.clone())
     .fetch_one(&db.clone())
@@ -129,7 +129,7 @@ pub async fn sync_channels_from_youtube(
 
     tracing::debug!("Fetching updated session information");
     let bearer = sqlx::query(
-        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
+        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1) and provider = 'google'",
     )
     .bind(&email)
     .fetch_one(db)

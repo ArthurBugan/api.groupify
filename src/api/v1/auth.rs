@@ -15,11 +15,11 @@ use sqlx::{PgPool, Row};
 use tower_cookies::Cookies;
 
 use crate::{
-    api::{common::utils::setup_auth_cookie, v1::{
-        login::generate_token, oauth::{
+    api::{common::{utils::setup_auth_cookie, ApiResponse}, v1::{
+        discord_auth::SocialLoginSessionStatus, login::generate_token, oauth::{
             fetch_user_profile, generate_auth_url, update_user_session, AuthRequest, OAuthProvider,
             Session,
-        }, user::get_email_from_token
+        }, user::{get_email_from_original_email, get_email_from_token, get_user_id_from_email}
     }},
     errors::AppError,
     InnerState,
@@ -87,6 +87,12 @@ pub async fn google_callback(
             AppError::ExternalService(anyhow::anyhow!("Failed to exchange authorization code"))
         })?;
 
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
     tracing::info!("Successfully exchanged authorization code for token");
     tracing::info!("Passou do oauth {:?}", token);
 
@@ -96,6 +102,19 @@ pub async fn google_callback(
 
     tracing::info!("Retrieved user profile for email: {}", profile.email);
 
+    let email;
+    let original_email;
+
+    if auth_token.is_empty() {
+        tracing::info!("No auth-token found, using user profile email: {}", profile.email);
+        original_email = profile.email.clone();
+        email = get_email_from_original_email(&db, &original_email.clone()).await?;
+    } else {
+        tracing::info!("Auth-token found, using token to get email: {}", auth_token);
+        email = get_email_from_token(auth_token).await?;
+        original_email = profile.email.clone();
+    }
+
     let max_age = calculate_token_expiry(token.expires_in()).await;
     tracing::debug!("Calculated token expiry: {:?}", max_age);
 
@@ -104,8 +123,10 @@ pub async fn google_callback(
         AppError::Validation(String::from("Token not found"))
     })?;
 
-    tracing::debug!("Generating JWT token for user: {}", profile.email);
-    let access_token = generate_token(&profile.email, profile.display_name.as_deref().unwrap_or(""))?;
+    let user_id = get_user_id_from_email(&db, &email).await?;
+
+    tracing::debug!("Generating JWT token for user: {}", email);
+    let access_token = generate_token(&email, &user_id)?;
     tracing::debug!("JWT token generated successfully");
 
     // Use the utility function instead of duplicated code
@@ -113,11 +134,12 @@ pub async fn google_callback(
 
     update_user_session(
         &db,
-        &profile.email,
+        &email,
         token.access_token().secret(),
         max_age,
         refresh_token.secret(),
         &OAuthProvider::Google,
+        &original_email,
     )
     .await?;
 
@@ -195,6 +217,7 @@ pub async fn renew_token(
         max_age,
         refresh_token.secret(),
         &OAuthProvider::Google,
+        &email,
     )
     .await?;
 
@@ -224,7 +247,7 @@ async fn fetch_refresh_token(db: &sqlx::PgPool, email: &str) -> Result<RefreshTo
 pub async fn check_google_session(
     State(inner): State<InnerState>,
     cookies: Cookies,
-) -> Result<Json<Value>, AppError> {
+) -> Result<Json<ApiResponse<SocialLoginSessionStatus>>, AppError> {
     tracing::info!("Checking Google session validity");
 
     let InnerState { db, .. } = inner;
@@ -256,7 +279,7 @@ pub async fn check_google_session(
 
     tracing::debug!("Checking session existence in database");
     let session: Option<Session> = sqlx::query_as::<_, Session>(
-        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1)",
+        "SELECT * FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1) AND provider = 'google'",
     )
     .bind(&email)
     .fetch_optional(&db)
@@ -270,12 +293,56 @@ pub async fn check_google_session(
     tracing::info!("session {:?}", session);
 
     if session.is_none() {
-        tracing::warn!("No session found for user: {}", email);
-        return Err(AppError::Validation(String::from("Session not found")));
+        tracing::info!("No Google session found for user: {}", email);
+        return Ok(Json(ApiResponse::error(
+            "No Google session found".to_string(),
+        )));
     }
 
+    let session = session.unwrap();
     tracing::info!("Valid session found for user: {}", email);
-    return Ok(Json(json!({ "success": "true" })));
+    Ok(Json(ApiResponse::success(SocialLoginSessionStatus {
+        connected: true,
+        provider: "google".to_string(),
+        expired: false,
+        expires_at: session.expires_at.to_rfc3339(),
+    })))
+}
+
+#[tracing::instrument(name = "Disconnect Google session", skip(inner, cookies))]
+pub async fn disconnect_google(
+    State(inner): State<InnerState>,
+    cookies: Cookies,
+) -> Result<Json<ApiResponse<String>>, AppError> {
+    tracing::info!("Disconnecting Google session");
+
+    let InnerState { db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .and_then(|cookie| Some(cookie.value().to_string()))
+        .ok_or_else(|| {
+            tracing::warn!("No auth token found in cookies");
+            AppError::Authentication(anyhow::anyhow!("No authentication token"))
+        })?;
+
+    let email = get_email_from_token(auth_token).await?;
+
+    sqlx::query(
+        "DELETE FROM sessions WHERE user_id = (SELECT id FROM users WHERE email = $1 LIMIT 1) AND provider = 'google'",
+    )
+    .bind(&email)
+    .execute(&db)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to delete Google session: {:?}", e);
+        AppError::Database(anyhow::Error::new(e).context("SQLx operation failed"))
+    })?;
+
+    tracing::info!("Google session disconnected for user: {}", email);
+    Ok(Json(ApiResponse::success(
+        "Google session disconnected successfully".to_string(),
+    )))
 }
 
 #[tracing::instrument(name = "Google login initiation")]
