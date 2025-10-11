@@ -36,6 +36,7 @@ pub struct Session {
     pub session_id: String,
     pub refresh_token: String,
     pub expires_at: DateTime<Utc>,
+    pub original_email: Option<String>,
 }
 
 #[derive(Deserialize, sqlx::FromRow, Clone)]
@@ -205,6 +206,7 @@ pub async fn update_user_session(
     expires_at: chrono::NaiveDateTime,
     refresh_token: &str,
     provider: &OAuthProvider,
+    original_email: &str,
 ) -> Result<(), AppError> {
     tracing::info!("Updating user session for provider: {}", provider.as_str());
 
@@ -213,8 +215,8 @@ pub async fn update_user_session(
 
     let _ = sqlx::query!(
         r#"
-        INSERT INTO sessions (user_id, session_id, refresh_token, expires_at, provider)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO sessions (user_id, session_id, refresh_token, expires_at, provider, original_email)
+        VALUES ($1, $2, $3, $4, $5, $6)
         ON CONFLICT (user_id, provider) DO UPDATE
         SET 
             session_id = EXCLUDED.session_id,
@@ -225,7 +227,8 @@ pub async fn update_user_session(
         access_token,
         refresh_token,
         chrono::Utc.from_utc_datetime(&expires_at),
-        provider.as_str()
+        provider.as_str(),
+        original_email,
     )
     .execute(db)
     .await

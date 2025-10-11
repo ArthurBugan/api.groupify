@@ -594,6 +594,23 @@ pub async fn all_channels_by_group_id(
     Ok(channels)
 }
 
+#[tracing::instrument(name = "Get count of channels by channel ID for user", skip(db))]
+pub async fn all_count_by_channel_id(
+    db: &sqlx::PgPool,
+    group_id: &str,
+    user_id: &str,
+) -> Result<i64, AppError> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM channels WHERE group_id = $1 AND user_id = $2",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+
+    Ok(count)
+}
+
 #[tracing::instrument(name = "Delete all channels by group ID for user", skip(db))]
 async fn delete_channels_by_group_id(
     db: &sqlx::PgPool,

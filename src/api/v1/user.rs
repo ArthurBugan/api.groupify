@@ -1,3 +1,4 @@
+use crate::api::v1::oauth::Session;
 use crate::authentication::compute_password_hash;
 use crate::api::v1::login::Claims;
 use crate::errors::AppError; // Added
@@ -169,6 +170,47 @@ pub async fn get_password_confirmation_token_from_user(
     Ok(id)
 }
 
+#[tracing::instrument(name = "Get user id from email", skip(email, pool))]
+pub async fn get_user_id_from_email(
+    pool: &PgPool,
+    email: &str,
+) -> Result<String, AppError> { // Changed return type
+    let id = sqlx::query_as::<_, User>(r#" SELECT * FROM users WHERE email = $1"#)
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to get user id from email")))?
+        .id
+        .ok_or_else(|| AppError::NotFound("User ID not found for email".to_string()))?;
+
+    Ok(id)
+}
+
+#[tracing::instrument(name = "Get email from original email", skip(pool))]
+pub async fn get_email_from_original_email(
+    pool: &PgPool,
+    original_email: &str,
+) -> Result<String, AppError> {
+    let session = sqlx::query_as::<_, Session>(r#"SELECT * FROM sessions WHERE original_email = $1"#)
+        .bind(original_email)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to get session from original email")))?
+        .user_id;
+    
+    tracing::info!("Email found for original email {}: user_id {}", original_email, session);
+
+    let email = sqlx::query_scalar::<_, String>(r#"SELECT email FROM users u WHERE u.id = $1"#)
+        .bind(session)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to get email from original email")))?;
+    
+    tracing::info!("Email found for original email {}: email {}", original_email, email);
+    Ok(email)
+}
+
+#[tracing::instrument(name = "Get email from token", skip(token))]
 pub async fn get_email_from_token(token: String) -> Result<String, AppError> { // Changed return type and error handling
     let secret = std::env::var("SECRET_TOKEN")
         .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN Env must be set")))?;
