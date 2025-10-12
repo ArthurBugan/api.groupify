@@ -133,6 +133,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "https://coolify.groupify.dev".parse().unwrap(),
         "https://www.youtube.com".parse().unwrap(),
         "https://youtube.com".parse().unwrap(),
+        "http://192.168.68.55:3000".parse().unwrap(),
+        "http://192.168.68.55".parse().unwrap(),
     ];
 
     let cors = CorsLayer::new()
@@ -151,7 +153,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!("Building application router with versioned routes");
 
     let app = Router::new()
-        .merge(create_system_router(app_state.db.clone()))
+        .merge(create_system_router(app_state.clone()).with_state(app_state.clone()))
         .merge(create_v1_routes(app_state.clone()).with_state(app_state.clone()))
         .merge(create_v2_router(app_state.clone()).with_state(app_state.clone()))
         // Apply middleware layers
