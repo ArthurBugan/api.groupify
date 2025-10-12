@@ -11,11 +11,12 @@ pub mod users;
 pub mod dashboard;
 pub mod animes;
 
-use axum::Router;
+use axum::{middleware, Router};
 use axum::routing::{delete, get, patch, post, put};
 use tower_cookies::CookieManagerLayer;
 
 use crate::InnerState;
+use crate::api::common::middleware::auth_middleware;
 
 /// Creates the V2 API router
 #[tracing::instrument(name = "create_v2_router", skip(state))]
@@ -41,5 +42,6 @@ pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v2/animes", get(animes::all_animes))
 
         .layer(CookieManagerLayer::new())
+        .layer(middleware::from_fn(auth_middleware))
         .with_state(state)
 }

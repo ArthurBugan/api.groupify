@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tower_cookies::{Cookie, Cookies};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub user_id: String,
@@ -76,6 +76,8 @@ pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
     tracing::debug!("Creating removal cookie for auth-token");
     let mut cookie = Cookie::named("auth-token");
     cookie.set_same_site(SameSite::None);
+    cookie.set_path("/");
+    cookie.set_secure(true);
     cookie.make_removal();
 
     cookies.remove(cookie);
