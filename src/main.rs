@@ -141,6 +141,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Method::OPTIONS,
             Method::PUT,
             Method::DELETE,
+            Method::PATCH,
         ])
         .allow_headers([CONTENT_TYPE])
         .allow_origin(origins)
