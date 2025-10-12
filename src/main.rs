@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Method::DELETE,
         ])
         .allow_headers([CONTENT_TYPE])
-        .allow_origin(origins)
+        .allow_origin(Any)
         .allow_credentials(true);
 
     // Build the main application with versioned routes
