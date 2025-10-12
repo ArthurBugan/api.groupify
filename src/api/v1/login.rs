@@ -76,6 +76,8 @@ pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
     tracing::debug!("Creating removal cookie for auth-token");
     let mut cookie = Cookie::named("auth-token");
     cookie.set_same_site(SameSite::None);
+    cookie.set_path("/");
+    cookie.set_secure(true);
     cookie.make_removal();
 
     cookies.remove(cookie);
