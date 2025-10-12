@@ -131,6 +131,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "https://localhost:3000".parse().unwrap(),
         "https://groupify.dev".parse().unwrap(),
         "https://beta.groupify.dev".parse().unwrap(),
+        "https://beta.groupify.dev/".parse().unwrap(),
+        "https://www.beta.groupify.dev/".parse().unwrap(),
         "https://coolify.groupify.dev".parse().unwrap(),
         "https://www.youtube.com".parse().unwrap(),
         "https://youtube.com".parse().unwrap(),
