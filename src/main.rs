@@ -123,21 +123,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    let origins = [
+   let origins = [
         "https://localhost".parse().unwrap(),
-        "https://localhost/".parse().unwrap(),
         "http://localhost".parse().unwrap(),
         "http://localhost:3000".parse().unwrap(),
         "https://localhost:3000".parse().unwrap(),
         "https://groupify.dev".parse().unwrap(),
-        "https://beta.groupify.dev".parse().unwrap(),
-        "https://beta.groupify.dev/".parse().unwrap(),
-        "https://www.beta.groupify.dev/".parse().unwrap(),
         "https://coolify.groupify.dev".parse().unwrap(),
         "https://www.youtube.com".parse().unwrap(),
         "https://youtube.com".parse().unwrap(),
-        "http://192.168.68.55:3000".parse().unwrap(),
-        "http://192.168.68.55".parse().unwrap(),
     ];
 
     let cors = CorsLayer::new()
