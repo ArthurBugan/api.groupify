@@ -124,6 +124,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
    let origins = [
+        "chrome-extension://dmdgaegnpjnnkcbdngfgkhlehlccbija".parse().unwrap(),
+        "chrome-extension://jbifilepodgklfkblilibnbbbncjphde".parse().unwrap(),
         "https://localhost".parse().unwrap(),
         "http://localhost".parse().unwrap(),
         "http://localhost:3000".parse().unwrap(),

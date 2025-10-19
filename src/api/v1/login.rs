@@ -1,4 +1,5 @@
 use crate::api::common::utils::setup_auth_cookie;
+use crate::api::common::ApiResponse;
 use crate::authentication::{validate_credentials, Credentials};
 use crate::errors::AppError;
 use crate::InnerState;
@@ -35,7 +36,7 @@ pub async fn login_user(
     cookies: Cookies,
     State(inner): State<InnerState>,
     form: Json<FormData>,
-) -> Result<Json<Value>, AppError> {
+) -> Result<Json<ApiResponse<String>>, AppError> {
     tracing::info!("Starting login process for user: {}", form.email);
     let InnerState { db, .. } = inner;
 
@@ -63,10 +64,10 @@ pub async fn login_user(
     })?;
 
     // Use the utility function instead of duplicated code
-    setup_auth_cookie(&token, &domain, &cookies);
+    setup_auth_cookie(&token.clone(), &domain, &cookies);
 
     tracing::info!("Login completed successfully for user: {}", form.email);
-    Ok(Json(json!({ "data": "login completed" })))
+    Ok(Json(ApiResponse::success(token.clone())))
 }
 
 #[tracing::instrument(name = "User logout", skip(cookies))]

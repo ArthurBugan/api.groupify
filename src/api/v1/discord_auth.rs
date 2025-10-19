@@ -28,6 +28,11 @@ pub struct SocialLoginSessionStatus {
     pub expires_at: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AuthQueryParams {
+    pub origin: Option<String>,
+}
+
 #[tracing::instrument(name = "Discord OAuth callback", skip(cookies, inner, query), fields(code_length = query.code.len()))]
 pub async fn discord_callback(
     cookies: Cookies,
@@ -130,10 +135,18 @@ pub async fn discord_callback(
         == "development";
 
     let protocol = if is_development { "http" } else { "https" };
-    let redirect_url = format!(
+    let mut redirect_url = format!(
         "{}://{}/dashboard?auth=success&provider=discord",
         protocol, frontend_url
     );
+
+    if let Some(state) = query.state {
+        let parts: Vec<&str> = state.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            let origin_value = parts[1];
+            redirect_url = format!("{}{}", redirect_url, format!("&origin={}", origin_value));
+        }
+    }
 
     tracing::info!(
         "Discord OAuth callback completed successfully for: {}",
@@ -143,12 +156,16 @@ pub async fn discord_callback(
 }
 
 #[tracing::instrument(name = "Discord login initiation")]
-pub async fn discord_login(State(inner): State<InnerState>) -> Result<impl IntoResponse, AppError> {
+pub async fn discord_login(
+    State(inner): State<InnerState>,
+    Query(params): Query<AuthQueryParams>,
+) -> Result<impl IntoResponse, AppError> {
     tracing::info!("Initiating Discord OAuth login");
 
     let auth_url = crate::api::v1::oauth::generate_auth_url(
         &inner.oauth_clients.discord,
         &OAuthProvider::Discord,
+        params.origin,
     );
 
     tracing::debug!("Generated Discord auth URL: {}", auth_url);

@@ -14,3 +14,6 @@ target
 .idea/dataSources
 .idea/dataSources.local.xml
 fly.toml
+Caddyfile
+
+docker-compose.yml

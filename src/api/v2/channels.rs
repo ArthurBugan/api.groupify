@@ -402,23 +402,23 @@ pub async fn patch_channel(
 
         if let Some(group_id) = payload.group_id {
             separated.push("group_id = ");
-            separated.push_bind(group_id);
+            separated.push_bind_unseparated(group_id);
         }
         if let Some(name) = payload.name {
             separated.push("name = ");
-            separated.push_bind(name);
+            separated.push_bind_unseparated(name);
         }
         if let Some(thumbnail) = payload.thumbnail {
             separated.push("thumbnail = ");
-            separated.push_bind(thumbnail);
+            separated.push_bind_unseparated(thumbnail);
         }
         if let Some(new_content) = payload.new_content {
             separated.push("new_content = ");
-            separated.push_bind(new_content);
+            separated.push_bind_unseparated(new_content);
         }
         if let Some(content_type) = payload.content_type {
             separated.push("content_type = ");
-            separated.push_bind(content_type);
+            separated.push_bind_unseparated(content_type);
         }
 
         // Add WHERE clause
