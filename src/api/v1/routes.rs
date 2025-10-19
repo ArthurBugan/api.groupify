@@ -14,8 +14,8 @@ use crate::api::v1::link_shortner::{create_link, get_link_statistics, redirect, 
 use crate::api::v1::survey::{insert_survey};
 
 use crate::api::v1::youtube::{sync_channels_from_youtube};
-use crate::api::v1::auth::{google_callback, check_google_session, google_login, me, disconnect_google};
-use crate::api::v1::discord_auth::{discord_callback, discord_login, check_discord_session, disconnect_discord};
+use crate::api::v1::auth::{check_google_session, me, disconnect_google};
+use crate::api::v1::discord_auth::{check_discord_session, disconnect_discord};
 
 
 /// Creates V1 API routes (existing routes for backward compatibility)
