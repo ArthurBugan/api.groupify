@@ -25,6 +25,13 @@ use crate::{
     InnerState,
 };
 
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct AuthQueryParams {
+    pub origin: Option<String>,
+}
+
 #[tracing::instrument(name = "Google OAuth callback", skip(inner, query), fields(code_length = query.code.len()))]
 pub async fn google_callback(
     cookies: Cookies,
@@ -150,10 +157,19 @@ pub async fn google_callback(
         == "development";
 
     let protocol = if is_development { "http" } else { "https" };
-    let redirect_url = format!(
+    let mut redirect_url = format!(
         "{}://{}/dashboard/groups?auth=success&provider=google",
         protocol, domain
     );
+
+    if let Some(state) = query.state {
+        let parts: Vec<&str> = state.splitn(2, '-').collect();
+        if parts.len() == 2 {
+            let origin_value = parts[1];
+            redirect_url = format!("{}{}", redirect_url, format!("&origin={}", origin_value));
+        }
+    }
+
     tracing::info!("Redirecting user to: {}", redirect_url);
 
     Ok(Redirect::to(redirect_url.as_str()))
@@ -346,10 +362,17 @@ pub async fn disconnect_google(
 }
 
 #[tracing::instrument(name = "Google login initiation")]
-pub async fn google_login(State(inner): State<InnerState>) -> Result<impl IntoResponse, AppError> {
+pub async fn google_login(
+    State(inner): State<InnerState>,
+    Query(params): Query<AuthQueryParams>,
+) -> Result<impl IntoResponse, AppError> {
     tracing::info!("Initiating Google OAuth login");
 
-    let auth_url = generate_auth_url(&inner.oauth_clients.google, &OAuthProvider::Google);
+    let auth_url = generate_auth_url(
+        &inner.oauth_clients.google,
+        &OAuthProvider::Google,
+        params.origin,
+    );
 
     tracing::debug!("Generated Google auth URL: {}", auth_url);
     Ok(Redirect::to(&auth_url))

@@ -97,8 +97,19 @@ pub fn build_discord_oauth_client(client_id: String, client_secret: String) -> B
 }
 
 #[tracing::instrument(name = "Generate OAuth authorization URL")]
-pub fn generate_auth_url(client: &BasicClient, provider: &OAuthProvider) -> String {
-    let mut auth_request = client.authorize_url(oauth2::CsrfToken::new_random);
+pub fn generate_auth_url(
+    client: &BasicClient,
+    provider: &OAuthProvider,
+    origin: Option<String>,
+) -> String {
+    let csrf_token = oauth2::CsrfToken::new_random();
+    let state_with_origin = if let Some(origin_value) = origin {
+        format!("{}-{}", csrf_token.secret(), origin_value)
+    } else {
+        csrf_token.secret().to_string()
+    };
+
+    let mut auth_request = client.authorize_url(|| oauth2::CsrfToken::new(state_with_origin));
 
     match provider {
         OAuthProvider::Google => {
