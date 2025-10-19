@@ -4,9 +4,13 @@ pub mod health_check;
 pub mod metrics;
 
 use axum::{
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, post},
     Router,
 };
+
+
+use crate::api::v1::auth::{google_callback, google_login, me, disconnect_google};
+use crate::api::v1::discord_auth::{discord_callback, discord_login};
 
 use crate::api::v1::login::{login_user, logout_user};
 use crate::api::v1::subscription_confirm::confirm;
@@ -35,5 +39,12 @@ pub fn create_system_router(state: InnerState) -> Router<InnerState> {
             post(change_password),
         )
         .route("/language", get(get_language))
+
+        .route("/auth/google", get(google_login))
+        .route("/auth/google_callback", get(google_callback))
+
+        .route("/auth/discord", get(discord_login))
+        .route("/auth/discord_callback", get(discord_callback))
+
         .with_state(state)
 }

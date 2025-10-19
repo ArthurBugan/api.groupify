@@ -11,10 +11,10 @@ use crate::{api::common::middleware::auth_middleware, InnerState};
 use crate::api::v1::channel::{all_channels, all_channels_by_group, create_channel, update_channels_in_group, fetch_youtube_channels, save_youtube_channels};
 use crate::api::v1::group::{all_groups, create_group, delete_group, update_group};
 use crate::api::v1::link_shortner::{create_link, get_link_statistics, redirect, update_link};
-use crate::api::v1::auth::{google_callback, check_google_session, google_login, me, disconnect_google};
 use crate::api::v1::survey::{insert_survey};
 
 use crate::api::v1::youtube::{sync_channels_from_youtube};
+use crate::api::v1::auth::{google_callback, check_google_session, google_login, me, disconnect_google};
 use crate::api::v1::discord_auth::{discord_callback, discord_login, check_discord_session, disconnect_discord};
 
 
@@ -53,15 +53,11 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
         )
         
         // OAuth routes
-        .route("/auth/google", get(google_login))
-        .route("/auth/google_callback", get(google_callback))
         .route("/check-google-session", get(check_google_session))
         .route("/auth/check-google-session", get(check_google_session))
         .route("/auth/disconnect-google", delete(disconnect_google))
         
         // New Discord OAuth routes
-        .route("/auth/discord", get(discord_login))
-        .route("/auth/discord_callback", get(discord_callback))
         .route("/auth/check-discord-session", get(check_discord_session))
         .route("/auth/disconnect-discord", delete(disconnect_discord))
 
