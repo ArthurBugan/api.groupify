@@ -17,7 +17,7 @@ pub fn setup_auth_cookie(token: &str, domain: &str, cookies: &Cookies) {
         // Development settings - works with HTTP
         cookie.set_domain("localhost".to_string());
         cookie.set_same_site(SameSite::None); // More permissive for development
-        cookie.set_secure(false); // Allow HTTP in development
+        cookie.set_secure(true); // Allow HTTP in development
     } else {
         // Production settings - requires HTTPS
         let cookie_domain = if domain.starts_with('.') {
@@ -27,7 +27,7 @@ pub fn setup_auth_cookie(token: &str, domain: &str, cookies: &Cookies) {
         };
         cookie.set_domain(cookie_domain);
         cookie.set_same_site(SameSite::None);
-        cookie.set_secure(false);
+        cookie.set_secure(true);
     }
 
     let mut now = OffsetDateTime::now_utc();
