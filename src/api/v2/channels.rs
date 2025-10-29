@@ -2,6 +2,7 @@ use crate::api::common::utils::timeout_query;
 use crate::api::common::ApiResponse;
 use crate::api::v1::channel::Channel;
 use crate::api::v1::user::get_user_id_from_token;
+use crate::api::v1::youtube::sync_channels_from_youtube;
 use crate::errors::AppError;
 use crate::InnerState;
 use anyhow::Result;
@@ -82,7 +83,7 @@ pub async fn all_channels(
     tracing::info!("Starting all_channels request");
 
     let fetch_channels_timeout = tokio::time::Duration::from_millis(10000);
-    let InnerState { db, .. } = inner;
+    let InnerState { db, .. } = inner.clone();
 
     let auth_token = cookies
         .get("auth-token")
@@ -127,7 +128,7 @@ pub async fn all_channels(
         "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
          INNER JOIN users u ON u.id = c.user_id 
          LEFT JOIN groups g ON g.id = c.group_id 
-         WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
+         WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
          UNION ALL 
          SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
          INNER JOIN users u ON u.id = yc.user_id 
@@ -170,7 +171,7 @@ pub async fn all_channels(
                         "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url, c.content_type as content_type FROM channels c 
                          INNER JOIN users u ON u.id = c.user_id 
                          LEFT JOIN groups g ON g.id = c.group_id 
-                         WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
+                         WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
                          UNION ALL 
                          SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
                          INNER JOIN users u ON u.id = yc.user_id 
@@ -189,7 +190,7 @@ pub async fn all_channels(
                     "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
                     INNER JOIN users u ON u.id = c.user_id 
                     LEFT JOIN groups g ON g.id = c.group_id 
-                    WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1  
+                    WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
                     UNION ALL 
                     SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
                     INNER JOIN users u ON u.id = yc.user_id 
@@ -244,7 +245,7 @@ pub async fn all_channels(
                             SELECT c.id, c.name, g.name as group_name, c.content_type as content_type FROM channels c 
                             INNER JOIN users u ON u.id = c.user_id 
                             LEFT JOIN groups g ON g.id = c.group_id 
-                            WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
+                            WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
                             UNION ALL 
                             SELECT yc.id, yc.name, NULL as group_name, 'youtube' as content_type FROM youtube_channels yc 
                             INNER JOIN users u ON u.id = yc.user_id 
@@ -273,7 +274,7 @@ pub async fn all_channels(
                         SELECT c.id FROM channels c 
                         INNER JOIN users u ON u.id = c.user_id 
                         LEFT JOIN groups g ON g.id = c.group_id 
-                        WHERE c.content_type = 'youtube' OR c.content_type IS NULL AND u.id = $1 
+                        WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
                         UNION ALL 
                         SELECT yc.id FROM youtube_channels yc 
                         INNER JOIN users u ON u.id = yc.user_id 
@@ -307,6 +308,10 @@ pub async fn all_channels(
             )));
         }
     };
+
+    if let Err(e) = sync_channels_from_youtube(cookies.clone(), State(inner.clone())).await {
+        tracing::error!("Error syncing channels from YouTube: {:?}", e);
+    }
 
     let total_pages = ((total_count as f64) / (limit as f64)).ceil() as i32;
 
