@@ -22,7 +22,7 @@ pub struct ChannelPaginationParams {
 }
 
 /// Paginated response structure for channels
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PaginatedChannelsResponse {
     pub data: Vec<ChannelWithGroup>,
     pub pagination: PaginationInfo,
@@ -59,7 +59,7 @@ pub struct ChannelWithGroup {
 #[serde(rename_all = "camelCase")]
 pub struct PatchChannelRequest {
     pub id: String,
-    pub group_id: Option<String>,
+    pub group_id: String,
     pub name: Option<String>,
     pub thumbnail: Option<String>,
     pub url: Option<String>,
@@ -115,6 +115,22 @@ pub async fn all_channels(
     let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(25).max(1).min(100); // Cap at 100 items per page
     let offset = (page - 1) * limit;
+
+    let cache_key = format!(
+        "user:{}:channels:{}:{}:{}",
+        user_id,
+        page,
+        limit,
+        params.search.clone().unwrap_or_default()
+    );
+
+    let redis_cache = &inner.redis_cache;
+    if let Ok(cached) = redis_cache.get_json::<PaginatedChannelsResponse>(&cache_key).await {
+        if let Some(cached_response) = cached {
+            tracing::debug!("all_channels: returning cached page {}", page);
+            return Ok(Json(cached_response));
+        }
+    }
 
     tracing::info!(
         "all_channels: Pagination - page: {}, limit: {}, offset: {}",
@@ -325,6 +341,10 @@ pub async fn all_channels(
         },
     };
 
+    if let Err(e) = inner.redis_cache.set_json(&cache_key, &response, 300).await {
+        tracing::warn!("all_channels: redis SETEX error: {:?}", e);
+    }
+
     let duration = start_time.elapsed();
     tracing::info!(
         "all_channels: Completed successfully in {:?} - found {} total channels, {} pages",
@@ -372,10 +392,25 @@ pub async fn patch_channel(
 
     // Check if the channel exists and belongs to the user
     let existing_channel = match sqlx::query_as::<_, ChannelWithGroup>(
-        "SELECT c.*, g.name as group_name, g.icon as group_icon
-        FROM channels c
-        LEFT JOIN groups g ON g.id = c.group_id
-        WHERE c.id = $1 AND c.user_id = $2",
+        "SELECT
+            c.*,
+            g.name AS group_name,
+            g.icon AS group_icon
+            FROM channels c
+            LEFT JOIN groups g
+            ON g.id = c.group_id
+            WHERE c.id = $1
+            AND (
+                c.user_id = $2
+                OR g.user_id = $2
+                OR EXISTS (
+                SELECT 1
+                FROM group_members gm
+                WHERE gm.group_id = c.group_id
+                    AND gm.user_id = $2
+                    AND gm.role IN ('admin', 'editor')
+                )
+            )",
     )
     .bind(&channel_id)
     .bind(&user_id)
@@ -405,10 +440,9 @@ pub async fn patch_channel(
 
         let mut separated = builder.separated(", ");
 
-        if let Some(group_id) = payload.group_id {
-            separated.push("group_id = ");
-            separated.push_bind_unseparated(group_id);
-        }
+        separated.push("group_id = ");
+        separated.push_bind_unseparated(payload.group_id);
+        
         if let Some(name) = payload.name {
             separated.push("name = ");
             separated.push_bind_unseparated(name);
@@ -429,8 +463,6 @@ pub async fn patch_channel(
         // Add WHERE clause
         builder.push(" WHERE id = ");
         builder.push_bind(&channel_id);
-        builder.push(" AND user_id = ");
-        builder.push_bind(&user_id);
         builder.push(" RETURNING *");
 
         let query = builder.build_query_as::<Channel>();
@@ -445,10 +477,22 @@ pub async fn patch_channel(
 
         // After successful update, fetch the channel with group info
         let fetched_channel = match sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.*, g.name as group_name, g.icon as group_icon
+            "SELECT
+                c.*,
+                g.name AS group_name,
+                g.icon AS group_icon
             FROM channels c
             LEFT JOIN groups g ON g.id = c.group_id
-            WHERE c.id = $1 AND c.user_id = $2",
+            WHERE c.id = $1
+            AND (
+                    c.user_id = $2
+                    OR EXISTS (
+                        SELECT 1
+                        FROM group_members gm
+                        WHERE gm.group_id = c.group_id
+                        AND gm.user_id = $2
+                    )
+            )",
         )
         .bind(&updated_channel.id)
         .bind(&user_id)
@@ -477,17 +521,83 @@ pub async fn patch_channel(
         };
 
         let create_timeout = tokio::time::Duration::from_millis(10000); // 10 seconds timeout for creation
+
+        let authenticated_user_id = user_id.clone();
+        let group_id_from_payload = payload.group_id.clone();
+
+        // 1. Get the actual owner of the group
+        let group_owner_id: String = match tokio::time::timeout(
+            create_timeout,
+            sqlx::query_scalar::<_, String>("SELECT user_id FROM groups WHERE id = $1",)
+            .bind(&group_id_from_payload)
+            .fetch_one(&db),
+        )
+        .await
+        {
+            Ok(Ok(owner_id)) => owner_id,
+            Ok(Err(e)) => {
+                tracing::error!("patch_channel: Database error fetching group owner: {:?}", e);
+                return Err(AppError::Database(anyhow::Error::from(e)));
+            }
+            Err(elapsed) => {
+                tracing::error!("patch_channel: Timeout fetching group owner: {:?}", elapsed);
+                return Err(AppError::Timeout(elapsed));
+            }
+        };
+
+        let mut effective_user_id_for_channel_creation = authenticated_user_id.clone();
+
+        // 2. Check if the authenticated user is an admin/editor of the group
+        let member_role: Option<String> = match tokio::time::timeout(
+            create_timeout,
+            sqlx::query_scalar::<_, String>(
+                "SELECT role FROM group_members WHERE group_id = $1 AND user_id = $2",
+            )
+            .bind(&group_id_from_payload)
+            .bind(&authenticated_user_id)
+            .fetch_optional(&db),
+        )
+        .await
+        {
+            Ok(Ok(role_opt)) => role_opt,
+            Ok(Err(e)) => {
+                tracing::error!("create_channel: Database error fetching group member role: {:?}", e);
+                return Err(AppError::Database(anyhow::Error::from(e)));
+            }
+            Err(elapsed) => {
+                tracing::error!("create_channel: Timeout fetching group member role: {:?}", elapsed);
+                return Err(AppError::Timeout(elapsed));
+            }
+        };
+
+        if let Some(role) = member_role {
+            if role == "admin" || role == "editor" {
+                // If admin/editor, create channel on behalf of the group owner
+                effective_user_id_for_channel_creation = group_owner_id.clone();
+            } else {
+                // If just a member, they must be the owner to create a channel
+                if authenticated_user_id != group_owner_id {
+                    return Err(AppError::Permission(anyhow::anyhow!("You do not have permission to add channels to this group.")));
+                }
+            }
+        } else {
+            // If not a member at all, they must be the owner to create a channel
+            if authenticated_user_id != group_owner_id {
+                return Err(AppError::Permission(anyhow::anyhow!("You do not have permission to add channels to this group.")));
+            }
+        }
+
         let new_channel = match tokio::time::timeout(
             create_timeout,
             sqlx::query_as::<_, Channel>(
                 "INSERT INTO channels (id, user_id, group_id, name, thumbnail, channel_id, new_content, url, content_type) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *"
             )
             .bind(&channel_id)
-            .bind(&user_id)
+            .bind(&effective_user_id_for_channel_creation) // Use the determined effective_user_id
             .bind(payload.group_id)
             .bind(payload.name)
             .bind(payload.thumbnail)
-            .bind(format!("{}/{}", user_id, channel_id))
+            .bind(format!("{}/{}", effective_user_id_for_channel_creation, channel_id)) // Also update this format string
             .bind(false)
             .bind(cleaned_url)
             .bind(payload.content_type)
@@ -530,13 +640,27 @@ pub async fn patch_channel(
             WHERE c.id = $1 AND c.user_id = $2",
         )
         .bind(&new_channel.id)
-        .bind(&user_id)
+        .bind(&effective_user_id_for_channel_creation)
         .fetch_one(&db)
         .await?;
 
         fetched_channel
     };
 
+    let group_pattern = format!("user:{}:groups:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&group_pattern).await {
+        tracing::warn!("patch_channel: redis DEL group error: {:?}", e);
+    }
+
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("patch_channel: redis DEL channels error: {:?}", e);
+    }
+
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("patch_channel: redis DEL animes error: {:?}", e);
+    }
     Ok(Json(ApiResponse::success(updated_channel)))
 }
 
@@ -555,10 +679,21 @@ pub async fn all_channels_by_group_id(
         group_id
     );
 
+    let cache_key = format!("user:{}:group:{}:channels", user_id, group_id);
+    if let Ok(cached) = inner.redis_cache.get_json::<Vec<ChannelWithGroup>>(&cache_key).await {
+        if let Some(cached_response) = cached {
+            tracing::debug!(
+                "all_channels_by_group_id: returning cached group channels {}",
+                &group_id
+            );
+            return Ok(cached_response);
+        }
+    }
+
     let channels = match tokio::time::timeout(
         fetch_channels_timeout,
         sqlx::query_as::<_, ChannelWithGroup>(
-            "SELECT c.*, g.name as group_name, g.icon as group_icon FROM channels c INNER JOIN users u ON u.id = c.user_id LEFT JOIN groups g ON g.id = c.group_id WHERE u.id = $1 AND c.group_id = $2 ORDER BY c.created_at DESC"
+            "SELECT c.*, g.name as group_name, g.icon as group_icon FROM channels c INNER JOIN users u ON u.id = c.user_id LEFT JOIN groups g ON g.id = c.group_id LEFT JOIN group_members gm ON g.id = gm.group_id WHERE (g.user_id = $1 OR gm.user_id = $1) AND c.group_id = $2 ORDER BY c.created_at DESC"
         )
         .bind(&user_id)
         .bind(&group_id)
@@ -596,6 +731,9 @@ pub async fn all_channels_by_group_id(
         }
     };
 
+    if let Err(e) = inner.redis_cache.set_json(&cache_key, &channels, 300).await {
+        tracing::warn!("all_channels_by_group_id: redis SETEX error: {:?}", e);
+    }
     Ok(channels)
 }
 
@@ -606,7 +744,21 @@ pub async fn all_count_by_channel_id(
     user_id: &str,
 ) -> Result<i64, AppError> {
     let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM channels WHERE group_id = $1 AND user_id = $2",
+        "SELECT COUNT(*)
+            FROM channels c
+            WHERE c.group_id = $1
+            AND EXISTS (
+                SELECT 1
+                FROM groups g
+                LEFT JOIN group_members gm
+                ON gm.group_id = g.id
+                AND gm.user_id = $2
+                WHERE g.id = c.group_id
+                AND (
+                    g.user_id = $2
+                    OR gm.user_id IS NOT NULL
+                )
+            )",
     )
     .bind(group_id)
     .bind(user_id)
@@ -616,7 +768,7 @@ pub async fn all_count_by_channel_id(
     Ok(count)
 }
 
-#[tracing::instrument(name = "Delete all channels by group ID for user", skip(db))]
+#[tracing::instrument(name = "Delete all channels by group ID for user")]
 async fn delete_channels_by_group_id(
     db: &sqlx::PgPool,
     group_id: &str,
@@ -644,6 +796,7 @@ pub async fn patch_channels_batch(
         db,
         email_client,
         oauth_clients,
+        redis_cache,
     } = inner;
 
     let auth_token = cookies
@@ -679,6 +832,7 @@ pub async fn patch_channels_batch(
                 db: db.clone(),
                 email_client: email_client.clone(),
                 oauth_clients: oauth_clients.clone(),
+                redis_cache: redis_cache.clone(),
             }),
             Path(channel_id_for_patch),
             Json(channel_request),
@@ -687,6 +841,15 @@ pub async fn patch_channels_batch(
         updated_channels.push(patched_channel.data.as_mut().unwrap().clone());
     }
 
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("patch_channels_batch: redis DEL channels error: {:?}", e);
+    }
+
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("patch_channels_batch: redis DEL animes error: {:?}", e);
+    }
     Ok(Json(ApiResponse::success(updated_channels)))
 }
 
@@ -734,6 +897,14 @@ pub async fn get_channel_by_id(
         channel_id,
         user_id
     );
+
+    let cache_key = format!("user:{}:channel:{}", user_id, channel_id);
+    if let Ok(cached) = inner.redis_cache.get_json::<ChannelWithGroup>(&cache_key).await {
+        if let Some(cached_response) = cached {
+            tracing::debug!("get_channel_by_id: returning cached channel {}", channel_id);
+            return Ok(Json(ApiResponse::success(cached_response)));
+        }
+    }
 
     let channel = match tokio::time::timeout(
         fetch_channel_timeout,
@@ -795,6 +966,9 @@ pub async fn get_channel_by_id(
         start_time.elapsed()
     );
 
+    if let Err(e) = inner.redis_cache.set_json(&cache_key, &channel, 300).await {
+        tracing::warn!("get_channel_by_id: redis SETEX error: {:?}", e);
+    }
     Ok(Json(ApiResponse::success(channel)))
 }
 
@@ -900,5 +1074,14 @@ pub async fn delete_channel(
         }
     };
 
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("delete_channel: redis DEL channels error: {:?}", e);
+    }
+
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("delete_channel: redis DEL animes error: {:?}", e);
+    }
     Ok(Json(result.unwrap()))
 }

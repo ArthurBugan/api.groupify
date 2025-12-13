@@ -12,7 +12,7 @@ use crate::{
         common::{utils::setup_auth_cookie, ApiResponse},
         v1::{
             login::generate_token,
-            oauth::{fetch_user_profile, update_user_session, AuthRequest, OAuthProvider, Session}, user::{get_email_from_original_email, get_email_from_token, get_user_id_from_email, get_user_id_from_token},
+            oauth::{fetch_user_profile, update_user_session, AuthRequest, OAuthProvider, Session}, user::{get_email_from_original_email, get_email_from_token, get_user_id_from_email},
         },
     },
     errors::AppError,

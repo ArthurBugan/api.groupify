@@ -3,8 +3,10 @@ use cookie::{Cookie, SameSite};
 use tower_cookies::Cookies;
 
 use crate::errors::AppError;
+use sqlx::PgPool;
 
 pub fn setup_auth_cookie(token: &str, domain: &str, cookies: &Cookies) {
+
     let mut cookie = Cookie::new("auth-token", token.to_string());
 
     // Check if we're in development mode
@@ -51,4 +53,101 @@ where
             duration
         ))),
     }
+}
+
+pub async fn is_owner_or_admin(
+    db: &PgPool,
+    group_id: &str,
+    user_id: &str,
+) -> Result<bool, AppError> {
+    let timeout_duration = std::time::Duration::from_millis(5000); // 5 seconds timeout
+
+    // Check if user is the group owner
+    let is_owner = timeout_query(
+        timeout_duration,
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(db),
+    )
+    .await?;
+
+    if is_owner {
+        return Ok(true);
+    }
+
+    // Check if user is an admin in group_members
+    let is_admin = timeout_query(
+        timeout_duration,
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 AND role = 'admin')",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(db),
+    )
+    .await?;
+
+    Ok(is_admin)
+}
+
+pub async fn is_editor_or_admin(
+    db: &PgPool,
+    group_id: &str,
+    user_id: &str,
+) -> Result<bool, AppError> {
+    let timeout_duration = std::time::Duration::from_millis(5000); // 5 seconds timeout
+
+    let is_editor_or_admin = timeout_query(
+        timeout_duration,
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 AND (role = 'editor' OR role = 'admin'))",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(db),
+    )
+    .await?;
+
+    Ok(is_editor_or_admin)
+}
+
+pub async fn is_editor_or_owner(
+    db: &PgPool,
+    group_id: &str,
+    user_id: &str,
+) -> Result<bool, AppError> {
+    let timeout_duration = std::time::Duration::from_millis(5000); // 5 seconds timeout
+
+    // Check if user is the group owner
+    let is_owner = timeout_query(
+        timeout_duration,
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1 AND user_id = $2)",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(db),
+    )
+    .await?;
+
+    if is_owner {
+        return Ok(true);
+    }
+
+    // Check if user is an editor or admin in group_members
+    let is_editor_or_admin = timeout_query(
+        timeout_duration,
+        sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 AND (role = 'editor' OR role = 'admin'))",
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(db),
+    )
+    .await?;
+
+    Ok(is_editor_or_admin)
 }

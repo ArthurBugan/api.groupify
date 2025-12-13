@@ -8,8 +8,10 @@ pub mod responses;
 pub mod tracing;
 pub mod validation;
 pub mod utils;
+pub mod cache;
 
 use serde::{Deserialize, Serialize};
+use sqlx::prelude::FromRow;
 
 /// Standard API response wrapper
 #[derive(Debug, Serialize, Deserialize)]
@@ -48,13 +50,13 @@ pub struct PaginationParams {
     pub search: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct PaginatedResponse<T> {
     pub data: Vec<T>,
     pub pagination: PaginationInfo,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PaginationInfo {
     pub page: u32,

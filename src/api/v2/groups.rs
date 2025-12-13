@@ -87,7 +87,7 @@ pub async fn all_groups(
 ) -> Result<Json<PaginatedResponse<Group>>, AppError> {
     tracing::info!("Starting to fetch paginated groups for user");
 
-    let InnerState { db, .. } = inner;
+    let InnerState { db, redis_cache, .. } = inner;
     let fetch_groups_timeout = tokio::time::Duration::from_millis(10000);
 
     let auth_token = cookies
@@ -111,6 +111,21 @@ pub async fn all_groups(
     let limit = params.limit.unwrap_or(10).max(1).min(100); // Cap at 100 items per page
     let offset = (page - 1) * limit;
 
+    let cache_key = format!(
+        "user:{}:groups:{}:{}:{}",
+        user_id,
+        page,
+        limit,
+        params.search.clone().unwrap_or_default()
+    );
+
+    if let Ok(cached) = redis_cache.get_json::<PaginatedResponse<Group>>(&cache_key).await {
+        if let Some(cached_response) = cached {
+            tracing::debug!("all_groups: returning cached page {}", page);
+            return Ok(Json(cached_response));
+        }
+    }
+
     tracing::debug!(
         "Pagination: page={}, limit={}, offset={}, search={:?}",
         page,
@@ -133,9 +148,8 @@ pub async fn all_groups(
     let count_query = format!(
         r#"SELECT COUNT(DISTINCT g.id) as total 
            FROM groups g 
-           INNER JOIN users u ON u.id = g.user_id 
-           LEFT JOIN channels c ON c.group_id = g.id
-           WHERE u.id = $1 {} 
+           LEFT JOIN group_members gm ON g.id = gm.group_id
+           WHERE (g.user_id = $1 OR gm.user_id = $1) {} 
            "#,
         search_condition
     );
@@ -179,11 +193,11 @@ pub async fn all_groups(
 
     // Fetch paginated groups
     let groups_query = format!(
-        r#"SELECT g.*, 
+        r#"SELECT DISTINCT g.*, 
            (SELECT COUNT(*) FROM channels WHERE group_id = g.id) as channel_count
            FROM groups g 
-           INNER JOIN users u ON u.id = g.user_id 
-           WHERE u.id = $1 {} 
+           LEFT JOIN group_members gm ON g.id = gm.group_id
+           WHERE (g.user_id = $1 OR gm.user_id = $1) {} 
            ORDER BY g.nesting_level ASC, g.display_order ASC, g.name ASC
            LIMIT $2 OFFSET $3"#,
         search_condition
@@ -257,6 +271,10 @@ pub async fn all_groups(
         data: groups_with_channels,
         pagination: pagination_info,
     };
+
+    if let Err(e) = redis_cache.set_json(&cache_key, &response, 300).await {
+        tracing::warn!("all_groups: redis SETEX error: {:?}", e);
+    }
 
     tracing::debug!(
         "Returning {} groups with pagination info to client",
@@ -461,6 +479,10 @@ pub async fn update_display_order(
                 group_id,
                 final_display_order
             );
+            let groups_pattern = format!("user:{}:groups:*", user_id);
+            if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
+                tracing::warn!("update_display_order: redis DEL groups error: {:?}", e);
+            }
             Ok(Json(UpdateDisplayOrderResponse {
                 success: true,
                 message: format!(
@@ -707,6 +729,10 @@ pub async fn create_group(
         }
     };
 
+    let groups_pattern = format!("user:{}:groups:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
+        tracing::warn!("create_group: redis DEL groups error: {:?}", e);
+    }
     Ok(Json(CreateGroupResponse {
         success: true,
         message: "Group created successfully".to_string(),
@@ -857,16 +883,67 @@ pub async fn delete_group(
         }
     };
 
+    // Start a transaction
+    let mut tx = db.begin().await?;
+
+    // Delete all channels associated with the main group and its child groups
+    let all_group_ids_to_delete = child_group_ids
+        .iter()
+        .chain(std::iter::once(&group_id))
+        .collect::<Vec<_>>();
+
+    if !all_group_ids_to_delete.is_empty() {
+        let group_ids_placeholder = (2..=all_group_ids_to_delete.len() + 1)
+            .map(|i| format!("${}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let delete_channels_query = format!(
+            r#"DELETE FROM channels WHERE user_id = $1 AND group_id IN ({})"#,
+            group_ids_placeholder
+        );
+
+        let mut delete_channels = sqlx::query(&delete_channels_query).bind(&user_id);
+
+        for id_to_delete in &all_group_ids_to_delete {
+            delete_channels = delete_channels.bind(id_to_delete);
+        }
+
+        tracing::debug!("Deleting channels for user {} in groups {:?}", user_id, all_group_ids_to_delete);
+
+        match tokio::time::timeout(delete_timeout, delete_channels.execute(&mut *tx)).await {
+            Ok(Ok(result)) => {
+                tracing::info!(
+                    "Successfully deleted {} channels for groups: {:?}",
+                    result.rows_affected(),
+                    all_group_ids_to_delete
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Database error while deleting channels: {:?}", e);
+                tx.rollback().await?;
+                return Err(AppError::from(e));
+            }
+            Err(elapsed) => {
+                tracing::error!("Timeout while deleting channels: {:?}", elapsed);
+                tx.rollback().await?;
+                return Err(AppError::Database(anyhow::anyhow!(
+                    "Database query timeout after {:?} for deleting channels",
+                    delete_timeout
+                )));
+            }
+        }
+    }
+
     // Delete all child groups first (to avoid foreign key constraints)
     if !child_group_ids.is_empty() {
-        let child_ids_placeholder = child_group_ids
-            .iter()
-            .map(|_| "$3")
+        let child_ids_placeholder = (2..=child_group_ids.len() + 1)
+            .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(",");
 
         let delete_children_query = format!(
-            r#"DELETE FROM groups WHERE id IN ({}) AND user_id = $1"#,
+            r#"DELETE FROM groups WHERE user_id = $1 AND id IN ({})"#,
             child_ids_placeholder
         );
 
@@ -877,7 +954,7 @@ pub async fn delete_group(
             delete_children = delete_children.bind(child_id);
         }
 
-        match tokio::time::timeout(delete_timeout, delete_children.execute(&db)).await {
+        match tokio::time::timeout(delete_timeout, delete_children.execute(&mut *tx)).await {
             Ok(Ok(result)) => {
                 tracing::info!(
                     "Successfully deleted {} child groups for group {}",
@@ -887,12 +964,14 @@ pub async fn delete_group(
             }
             Ok(Err(e)) => {
                 tracing::error!("Database error while deleting child groups: {:?}", e);
+                tx.rollback().await?;
                 return Err(AppError::from(e));
             }
             Err(elapsed) => {
                 tracing::error!("Timeout while deleting child groups: {:?}", elapsed);
+                tx.rollback().await?;
                 return Err(AppError::Database(anyhow::anyhow!(
-                    "Database query timeout after {:?}",
+                    "Database query timeout after {:?} for deleting child groups",
                     delete_timeout
                 )));
             }
@@ -909,7 +988,7 @@ pub async fn delete_group(
         sqlx::query(&delete_main_query)
             .bind(&group_id)
             .bind(&user_id)
-            .execute(&db),
+            .execute(&mut *tx),
     )
     .await
     {
@@ -921,6 +1000,13 @@ pub async fn delete_group(
                     child_group_ids.len(),
                     email
                 );
+
+                let groups_pattern = format!("user:{}:groups:*", user_id);
+                if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
+                    tracing::warn!("delete_group: redis DEL groups error: {:?}", e);
+                }
+
+                tx.commit().await?;
                 Ok(Json(UpdateDisplayOrderResponse {
                     success: true,
                     message: format!(
@@ -930,6 +1016,7 @@ pub async fn delete_group(
                     ),
                 }))
             } else {
+                tx.rollback().await?;
                 tracing::warn!("Group {} not found or already deleted", group_id);
                 Err(AppError::NotFound(format!(
                     "Group '{}' not found",
@@ -980,14 +1067,10 @@ pub async fn get_group_by_id(
 
     // Query to get the group by ID and verify user ownership
     let group_query = r#"
-        SELECT 
-            g.*
-        FROM 
-            groups g
-        INNER JOIN 
-            users u ON u.id = g.user_id 
-        WHERE 
-            g.id = $1 AND u.id = $2
+        SELECT DISTINCT g.*
+        FROM groups g
+        LEFT JOIN group_members gm ON g.id = gm.group_id
+        WHERE g.id = $1 AND (g.user_id = $2 OR gm.user_id = $2)
     "#;
 
     tracing::debug!("Executing database query to fetch group by ID");
@@ -1094,7 +1177,18 @@ pub async fn update_group(
 
     // Verify the user owns this group
     let verify_query = r#"
-        SELECT id FROM groups WHERE id = $1 AND user_id = $2
+        SELECT id
+        FROM groups g
+        WHERE g.id = $1
+        AND (
+            g.user_id = $2
+            OR EXISTS (
+            SELECT 1
+            FROM group_members gm
+            WHERE gm.group_id = g.id
+                AND gm.user_id = $2
+            )
+        );
     "#;
 
     let group_exists = match tokio::time::timeout(
@@ -1176,16 +1270,27 @@ pub async fn update_group(
 
     // Update the group
     let update_query = r#"
-        UPDATE groups 
-        SET name = $2, 
-            description = $3, 
-            category = $4, 
-            icon = $5, 
-            parent_id = $6,
-            updated_at = CURRENT_TIMESTAMP 
-        WHERE id = $1 AND user_id = $7 
-        RETURNING *
-    "#;
+        UPDATE groups g
+            SET
+            name        = $2,
+            description = $3,
+            category    = $4,
+            icon        = $5,
+            parent_id   = $6,
+            updated_at  = CURRENT_TIMESTAMP
+            WHERE g.id = $1
+            AND (
+                g.user_id = $7
+                OR EXISTS (
+                SELECT 1
+                FROM group_members gm
+                WHERE gm.group_id = g.id
+                    AND gm.user_id = $7
+                    AND gm.role IN ('admin', 'editor')
+                )
+            )
+            RETURNING *;
+        "#;
 
     let updated_group = match tokio::time::timeout(
         update_timeout,
@@ -1217,6 +1322,11 @@ pub async fn update_group(
             )));
         }
     };
+
+    let groups_pattern = format!("user:{}:groups:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
+        tracing::warn!("update_group: redis DEL groups error: {:?}", e);
+    }
 
     Ok(Json(CreateGroupResponse {
         success: true,
