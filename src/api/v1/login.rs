@@ -90,10 +90,10 @@ pub async fn logout_user(cookies: Cookies) -> Result<Json<Value>, AppError> {
 pub fn generate_token(username: &str, user_id: &str) -> Result<String, AppError> {
     tracing::debug!("Starting JWT token generation for user: {}", username);
 
-    tracing::debug!("Retrieving SECRET_TOKEN environment variable");
-    let key = std::env::var("SECRET_TOKEN").map_err(|e| {
-        tracing::error!("SECRET_TOKEN environment variable not set: {:?}", e);
-        AppError::Unexpected(anyhow::anyhow!(e).context("SECRET_TOKEN env var not set"))
+    tracing::debug!("Retrieving TOKEN environment variable");
+    let key = std::env::var("TOKEN").map_err(|e| {
+        tracing::error!("TOKEN environment variable not set: {:?}", e);
+        AppError::Unexpected(anyhow::anyhow!(e).context("TOKEN env var not set"))
     })?;
 
     tracing::debug!("Creating JWT claims for user: {}", username);

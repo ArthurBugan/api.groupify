@@ -113,12 +113,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_expiry(Expiry::OnInactivity(Duration::days(120)));
 
     let oauth_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")?;
-    let oauth_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")?;
+    let oauth_secret = std::env::var("GOOGLE_OAUTH_CLIENT")?;
 
     let google_oauth_client = build_google_oauth_client(oauth_id.clone(), oauth_secret);
     let discord_oauth_client = build_discord_oauth_client(
         std::env::var("DISCORD_OAUTH_CLIENT_ID")?,
-        std::env::var("DISCORD_OAUTH_CLIENT_SECRET")?,
+        std::env::var("DISCORD_OAUTH_CLIENT")?,
     );
 
     let app_state = InnerState {

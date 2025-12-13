@@ -13,8 +13,8 @@ pub async fn auth_middleware(
     mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let secret = std::env::var("SECRET_TOKEN").map_err(|e| {
-        error!("SECRET_TOKEN not set: {:?}", e);
+    let secret = std::env::var("TOKEN").map_err(|e| {
+        error!("TOKEN not set: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
     })?;
 
