@@ -44,6 +44,14 @@ pub async fn get_dashboard_total(
         }
     };
 
+    let cache_key = format!("user:{}:dashboard_total", user_id);
+
+    if let Ok(cached) = inner.redis_cache.get_json::<DashboardTotalResponse>(&cache_key).await {
+        if let Some(counts) = cached {
+            return Ok(Json(ApiResponse::success(counts)));
+        }
+    }
+
     match sqlx::query_as::<_, DashboardTotalResponse>(
         r#"
         SELECT
@@ -58,7 +66,12 @@ pub async fn get_dashboard_total(
     .fetch_one(&db)
     .await
     {
-        Ok(counts) => Ok(Json(ApiResponse::success(counts))),
+        Ok(counts) => {
+            if let Err(e) = inner.redis_cache.set_json(&cache_key, &counts, 300).await {
+                tracing::warn!("dashboard_total: redis SETEX error: {:?}", e);
+            }
+            Ok(Json(ApiResponse::success(counts)))
+        },
         Err(e) => {
             tracing::error!("Failed to fetch dashboard totals: {:?}", e);
             Err(AppError::from(e))

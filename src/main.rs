@@ -42,6 +42,8 @@ use tracing_otel_extra::{
 };
 
 use opentelemetry::KeyValue;
+use deadpool_redis::{Config as RedisConfig, Pool as RedisPool, Runtime};
+use crate::api::common::cache::RedisCache;
 
 struct AppState {
     inner: InnerState,
@@ -54,6 +56,7 @@ struct InnerState {
     pub db: PgPool,
     pub email_client: EmailClient,
     pub oauth_clients: OAuthClients,
+    pub redis_cache: RedisCache,
 }
 
 #[derive(Default)]
@@ -100,6 +103,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let db = init_db().await?;
+    let cfg = RedisConfig::from_url(std::env::var("REDIS_URL").unwrap());
+    let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).unwrap();
+    let redis_cache = RedisCache { pool: redis_pool };
+
     let session_store = MemoryStore::default();
     let session = SessionManagerLayer::new(session_store)
         .with_secure(false)
@@ -121,6 +128,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             google: google_oauth_client,
             discord: discord_oauth_client,
         },
+        redis_cache,
     };
 
    let origins = [

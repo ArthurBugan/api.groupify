@@ -27,6 +27,12 @@ pub enum AppError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Permission denied: {0}")]
+    Permission(#[source] anyhow::Error),
+
     #[error("URL parsing error: {0}")]
     UrlParse(#[from] url::ParseError),
 
@@ -50,13 +56,15 @@ impl IntoResponse for AppError {
                 None,
             ),
             AppError::Validation(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone(), None),
             AppError::ExternalService(e) => (
                 StatusCode::BAD_GATEWAY,
                 format!("External service error: {}", e),
                 None,
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
-            // Add this new case
+            AppError::Permission(e) => (StatusCode::FORBIDDEN, format!("{}", e), None),
+            // Add this new case for Conflict errors
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
             AppError::UrlParse(e) => (StatusCode::BAD_REQUEST, format!("Invalid URL: {}", e), None),
             AppError::Timeout(e) => (

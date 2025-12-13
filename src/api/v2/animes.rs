@@ -19,7 +19,7 @@ pub struct AnimePaginationParams {
 }
 
 /// Paginated response structure for animes
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PaginatedAnimesResponse {
     pub data: Vec<UnifiedAnime>,
     pub pagination: PaginationInfo,
@@ -159,6 +159,22 @@ pub async fn all_animes(
     let limit = params.limit.unwrap_or(25).max(1).min(100);
     let offset = (page - 1) * limit;
 
+    let cache_key = format!(
+        "user:{}:animes:{}:{}:{}",
+        user_id,
+        page,
+        limit,
+        params.search.clone().unwrap_or_default()
+    );
+
+    let redis_cache = &inner.redis_cache;
+    if let Ok(cached) = redis_cache.get_json::<PaginatedAnimesResponse>(&cache_key).await {
+        if let Some(cached_response) = cached {
+            tracing::debug!("all_animes: returning cached page {}", page);
+            return Ok(Json(cached_response));
+        }
+    }
+
     let fetch_timeout = tokio::time::Duration::from_secs(10);
 
     // === Build Query using sqlx::QueryBuilder ===
@@ -247,7 +263,7 @@ pub async fn all_animes(
 
     let total_pages = ((total_count as f64) / (limit as f64)).ceil() as i32;
 
-    Ok(Json(PaginatedAnimesResponse {
+    let response = PaginatedAnimesResponse {
         data: animes,
         pagination: PaginationInfo {
             total: total_count,
@@ -255,5 +271,12 @@ pub async fn all_animes(
             limit,
             total_pages,
         },
-    }))
+    };
+
+    let redis_cache = &inner.redis_cache;
+    if let Err(e) = redis_cache.set_json(&cache_key, &response, 300).await {
+        tracing::warn!("all_animes: redis SETEX error: {:?}", e);
+    }
+
+    Ok(Json(response))
 }

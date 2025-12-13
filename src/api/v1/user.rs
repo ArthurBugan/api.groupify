@@ -5,7 +5,7 @@ use crate::errors::AppError; // Added
 use crate::InnerState;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName};
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{StatusCode};
 use axum::Json;
 use chrono::NaiveDateTime;
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
