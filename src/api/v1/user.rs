@@ -212,8 +212,8 @@ pub async fn get_email_from_original_email(
 
 #[tracing::instrument(name = "Get email from token", skip(token))]
 pub async fn get_email_from_token(token: String) -> Result<String, AppError> { // Changed return type and error handling
-    let secret = std::env::var("TOKEN")
-        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("TOKEN Env must be set")))?;
+    let secret = std::env::var("PAS_TKN")
+        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("PAS_TKN Env must be set")))?;
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(secret.as_ref()),
@@ -225,8 +225,8 @@ pub async fn get_email_from_token(token: String) -> Result<String, AppError> { /
 }
 
 pub async fn get_user_id_from_token(token: String) -> Result<String, AppError> { // Changed return type and error handling
-    let secret = std::env::var("TOKEN")
-        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("TOKEN Env must be set")))?;
+    let secret = std::env::var("PAS_TKN")
+        .map_err(|e| AppError::Unexpected(anyhow::anyhow!(e).context("PAS_TKN Env must be set")))?;
     let token_data = decode::<Claims>(
         &token,
         &DecodingKey::from_secret(secret.as_ref()),

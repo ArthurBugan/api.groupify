@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let email_client = EmailClient::new(
         std::env::var("EMAIL_BASE_URL")?,
-        std::env::var("EMAIL_TOKEN")?,
+        std::env::var("EMAIL")?,
     );
 
     let db = init_db().await?;
