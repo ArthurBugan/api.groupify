@@ -15,6 +15,8 @@ FROM debian:bookworm-slim
 # Set the working directory
 WORKDIR /usr/src/myapp
 
+COPY .env /usr/src/myapp/.env
+
 # Copy the built binary from the previous stage
 COPY --from=builder /usr/src/myapp/target/release/api-groupify /usr/src/myapp/api-groupify
 
