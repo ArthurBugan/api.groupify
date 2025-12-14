@@ -9,7 +9,7 @@ use axum::{
 };
 
 
-use crate::api::v1::auth::{google_callback, google_login, me, disconnect_google};
+use crate::api::v1::auth::{google_callback, google_login};
 use crate::api::v1::discord_auth::{discord_callback, discord_login};
 
 use crate::api::v1::login::{login_user, logout_user};

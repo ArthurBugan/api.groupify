@@ -42,7 +42,7 @@ use tracing_otel_extra::{
 };
 
 use opentelemetry::KeyValue;
-use deadpool_redis::{Config as RedisConfig, Pool as RedisPool, Runtime};
+use deadpool_redis::{Config as RedisConfig, Runtime};
 use crate::api::common::cache::RedisCache;
 
 struct AppState {
