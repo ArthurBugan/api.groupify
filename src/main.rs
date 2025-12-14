@@ -14,6 +14,7 @@ use crate::db::init_db;
 
 use crate::system::create_system_router;
 use crate::api::common::tracing::{make_custom_span, on_custom_request, on_custom_response, on_custom_failure};
+use crate::api::common::body_logger::log_request_response_body;
 
 use anyhow::Result;
 use axum::extract::FromRef;
@@ -165,6 +166,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .merge(create_v1_routes(app_state.clone()).with_state(app_state.clone()))
         .merge(create_v2_router(app_state.clone()).with_state(app_state.clone()))
         // Apply middleware layers
+        .layer(axum::middleware::from_fn(log_request_response_body))
         .layer(cors)
         .layer(CookieManagerLayer::new())
         .layer(session)
