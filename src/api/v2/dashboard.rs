@@ -15,7 +15,7 @@ pub struct DashboardTotalResponse {
     groups: i64,
     channels: i64,
     youtube_channels: i64,
-    shared_groups: i64, // Placeholder for now
+    shared_groups: i64,
     anime_channels: i64,
 }
 
@@ -59,7 +59,12 @@ pub async fn get_dashboard_total(
             (SELECT COUNT(*) FROM channels WHERE user_id = $1) as channels,
             (SELECT COUNT(*) FROM youtube_channels WHERE user_id = $1) as youtube_channels,
             (SELECT COUNT(*) FROM crunchyroll_channels) as anime_channels,
-            0::BIGINT as shared_groups
+            (
+                SELECT COUNT(DISTINCT sl.group_id)
+                FROM share_links sl
+                JOIN groups g ON g.id = sl.group_id
+                WHERE g.user_id = $1
+            ) AS shared_groups
         "#,
     )
     .bind(user_id)

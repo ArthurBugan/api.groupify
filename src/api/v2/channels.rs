@@ -428,7 +428,7 @@ pub async fn patch_channel(
         }
     };
 
-    let updated_channel = if let Some(mut channel) = existing_channel {
+    let updated_channel = if let Some(channel) = existing_channel {
         // Update existing channel
         tracing::info!(
             "patch_channel: Updating existing channel {} for user {}",
