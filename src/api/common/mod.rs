@@ -9,6 +9,7 @@ pub mod tracing;
 pub mod validation;
 pub mod utils;
 pub mod cache;
+pub mod body_logger;
 
 use serde::{Deserialize, Serialize};
 use sqlx::prelude::FromRow;
