@@ -125,7 +125,10 @@ pub async fn all_channels(
     );
 
     let redis_cache = &inner.redis_cache;
-    if let Ok(cached) = redis_cache.get_json::<PaginatedChannelsResponse>(&cache_key).await {
+    if let Ok(cached) = redis_cache
+        .get_json::<PaginatedChannelsResponse>(&cache_key)
+        .await
+    {
         if let Some(cached_response) = cached {
             tracing::debug!("all_channels: returning cached page {}", page);
             return Ok(Json(cached_response));
@@ -155,7 +158,7 @@ pub async fn all_channels(
     if let Some(search) = &params.search {
         if !search.trim().is_empty() {
             base_query = format!(
-                "SELECT * FROM ({}) AS combined_channels WHERE name ILIKE $2 OR group_name ILIKE $3",
+                "SELECT * FROM ({}) AS combined_channels WHERE LOWER(REPLACE(name, ' ', '')) ILIKE LOWER(REPLACE($2, ' ', '')) OR LOWER(REPLACE(group_name, ' ', '')) ILIKE LOWER(REPLACE($3, ' ', ''))",
                 base_query
             );
         }
@@ -267,7 +270,7 @@ pub async fn all_channels(
                             INNER JOIN users u ON u.id = yc.user_id 
                             WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
                         ) AS combined_channels 
-                        WHERE name ILIKE $2 OR group_name ILIKE $3"
+                        WHERE LOWER(REPLACE(name, ' ', '')) ILIKE LOWER(REPLACE($2, ' ', '')) OR LOWER(REPLACE(group_name, ' ', '')) ILIKE LOWER(REPLACE($3, ' ', ''))"
                     )
                     .bind(&user_id)
                     .bind(&search_pattern)
@@ -390,45 +393,72 @@ pub async fn patch_channel(
         }
     };
 
-    // Check if the channel exists and belongs to the user
-    let existing_channel = match sqlx::query_as::<_, ChannelWithGroup>(
-        "SELECT
-            c.*,
-            g.name AS group_name,
-            g.icon AS group_icon
-            FROM channels c
-            LEFT JOIN groups g
-            ON g.id = c.group_id
-            WHERE c.id = $1
-            AND (
-                c.user_id = $2
-                OR g.user_id = $2
-                OR EXISTS (
-                SELECT 1
-                FROM group_members gm
-                WHERE gm.group_id = c.group_id
-                    AND gm.user_id = $2
-                    AND gm.role IN ('admin', 'editor')
-                )
-            )",
-    )
-    .bind(&channel_id)
-    .bind(&user_id)
-    .fetch_optional(&db)
-    .await
-    {
-        Ok(channel) => channel,
-        Err(e) => {
-            tracing::error!(
-                "patch_channel: Database error while fetching existing channel {}: {:?}",
-                channel_id,
-                e
-            );
-            return Err(AppError::from(e));
-        }
-    };
+    // First, check if the channel exists at all
+    let channel_exists =
+        match sqlx::query_scalar::<_, String>("SELECT id FROM channels WHERE id = $1 and user_id = $2")
+            .bind(&channel_id)
+            .bind(&user_id)
+            .fetch_optional(&db)
+            .await
+        {
+            Ok(Some(_)) => true,
+            Ok(None) => false,
+            Err(e) => {
+                tracing::error!(
+                    "patch_channel: Database error while checking channel existence {}: {:?}",
+                    channel_id,
+                    e
+                );
+                return Err(AppError::from(e));
+            }
+        };
 
-    let updated_channel = if let Some(channel) = existing_channel {
+    let updated_channel = if channel_exists {
+        // If channel exists, verify user ownership/permissions before updating
+        let existing_channel_with_permissions = match sqlx::query_as::<_, ChannelWithGroup>(
+            "SELECT
+                c.*,
+                g.name AS group_name,
+                g.icon AS group_icon
+                FROM channels c
+                LEFT JOIN groups g
+                ON g.id = c.group_id
+                WHERE c.id = $1
+                AND (
+                    c.user_id = $2
+                    OR g.user_id = $2
+                    OR EXISTS (
+                    SELECT 1
+                    FROM group_members gm
+                    WHERE gm.group_id = c.group_id
+                        AND gm.user_id = $2
+                        AND gm.role IN ('admin', 'editor')
+                    )
+                )",
+        )
+        .bind(&channel_id)
+        .bind(&user_id)
+        .fetch_optional(&db)
+        .await
+        {
+            Ok(Some(channel)) => channel,
+            Ok(None) => {
+                tracing::warn!("patch_channel: Channel {} exists but user {} does not have permissions to modify it.", channel_id, user_id);
+                return Err(AppError::Permission(anyhow::anyhow!(format!(
+                    "You do not have permission to modify channel {}",
+                    channel_id
+                ))));
+            }
+            Err(e) => {
+                tracing::error!(
+                    "patch_channel: Database error while verifying channel permissions {}: {:?}",
+                    channel_id,
+                    e
+                );
+                return Err(AppError::from(e));
+            }
+        };
+
         // Update existing channel
         tracing::info!(
             "patch_channel: Updating existing channel {} for user {}",
@@ -442,7 +472,7 @@ pub async fn patch_channel(
 
         separated.push("group_id = ");
         separated.push_bind_unseparated(payload.group_id);
-        
+
         if let Some(name) = payload.name {
             separated.push("name = ");
             separated.push_bind_unseparated(name);
@@ -528,15 +558,18 @@ pub async fn patch_channel(
         // 1. Get the actual owner of the group
         let group_owner_id: String = match tokio::time::timeout(
             create_timeout,
-            sqlx::query_scalar::<_, String>("SELECT user_id FROM groups WHERE id = $1",)
-            .bind(&group_id_from_payload)
-            .fetch_one(&db),
+            sqlx::query_scalar::<_, String>("SELECT user_id FROM groups WHERE id = $1")
+                .bind(&group_id_from_payload)
+                .fetch_one(&db),
         )
         .await
         {
             Ok(Ok(owner_id)) => owner_id,
             Ok(Err(e)) => {
-                tracing::error!("patch_channel: Database error fetching group owner: {:?}", e);
+                tracing::error!(
+                    "patch_channel: Database error fetching group owner: {:?}",
+                    e
+                );
                 return Err(AppError::Database(anyhow::Error::from(e)));
             }
             Err(elapsed) => {
@@ -561,11 +594,17 @@ pub async fn patch_channel(
         {
             Ok(Ok(role_opt)) => role_opt,
             Ok(Err(e)) => {
-                tracing::error!("create_channel: Database error fetching group member role: {:?}", e);
+                tracing::error!(
+                    "create_channel: Database error fetching group member role: {:?}",
+                    e
+                );
                 return Err(AppError::Database(anyhow::Error::from(e)));
             }
             Err(elapsed) => {
-                tracing::error!("create_channel: Timeout fetching group member role: {:?}", elapsed);
+                tracing::error!(
+                    "create_channel: Timeout fetching group member role: {:?}",
+                    elapsed
+                );
                 return Err(AppError::Timeout(elapsed));
             }
         };
@@ -577,13 +616,17 @@ pub async fn patch_channel(
             } else {
                 // If just a member, they must be the owner to create a channel
                 if authenticated_user_id != group_owner_id {
-                    return Err(AppError::Permission(anyhow::anyhow!("You do not have permission to add channels to this group.")));
+                    return Err(AppError::Permission(anyhow::anyhow!(
+                        "You do not have permission to add channels to this group."
+                    )));
                 }
             }
         } else {
             // If not a member at all, they must be the owner to create a channel
             if authenticated_user_id != group_owner_id {
-                return Err(AppError::Permission(anyhow::anyhow!("You do not have permission to add channels to this group.")));
+                return Err(AppError::Permission(anyhow::anyhow!(
+                    "You do not have permission to add channels to this group."
+                )));
             }
         }
 
@@ -680,7 +723,11 @@ pub async fn all_channels_by_group_id(
     );
 
     let cache_key = format!("user:{}:group:{}:channels", user_id, group_id);
-    if let Ok(cached) = inner.redis_cache.get_json::<Vec<ChannelWithGroup>>(&cache_key).await {
+    if let Ok(cached) = inner
+        .redis_cache
+        .get_json::<Vec<ChannelWithGroup>>(&cache_key)
+        .await
+    {
         if let Some(cached_response) = cached {
             tracing::debug!(
                 "all_channels_by_group_id: returning cached group channels {}",
@@ -841,6 +888,12 @@ pub async fn patch_channels_batch(
         updated_channels.push(patched_channel.data.as_mut().unwrap().clone());
     }
 
+    // Invalidate user's group cache
+    let groups_pattern = format!("user:{}:group:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groups_pattern).await {
+        tracing::warn!("patch_channels_batch: redis DEL groups error: {:?}", e);
+    }
+
     let channels_pattern = format!("user:{}:channels:*", user_id);
     if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
         tracing::warn!("patch_channels_batch: redis DEL channels error: {:?}", e);
@@ -899,7 +952,11 @@ pub async fn get_channel_by_id(
     );
 
     let cache_key = format!("user:{}:channel:{}", user_id, channel_id);
-    if let Ok(cached) = inner.redis_cache.get_json::<ChannelWithGroup>(&cache_key).await {
+    if let Ok(cached) = inner
+        .redis_cache
+        .get_json::<ChannelWithGroup>(&cache_key)
+        .await
+    {
         if let Some(cached_response) = cached {
             tracing::debug!("get_channel_by_id: returning cached channel {}", channel_id);
             return Ok(Json(ApiResponse::success(cached_response)));
