@@ -7,8 +7,7 @@ use std::collections::HashSet;
 use tower_cookies::Cookies;
 
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, Iterable,
-    QueryFilter, QuerySelect, RelationTrait, Set,
+    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, Iterable, QueryFilter, QuerySelect, RelationTrait, Set
 };
 
 use crate::{

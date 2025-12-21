@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "subscription_plans_users")]
 pub struct Model {
@@ -14,38 +15,22 @@ pub struct Model {
     pub ended_at: Option<DateTimeWithTimeZone>,
     pub created_at: Option<DateTimeWithTimeZone>,
     pub updated_at: Option<DateTimeWithTimeZone>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::subscription_plans::Entity",
-        from = "Column::SubscriptionPlanId",
-        to = "super::subscription_plans::Column::Id",
+        belongs_to,
+        from = "subscription_plan_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    SubscriptionPlans,
+    pub subscription_plans: HasOne<super::subscription_plans::Entity>,
     #[sea_orm(
-        belongs_to = "super::users::Entity",
-        from = "Column::UserId",
-        to = "super::users::Column::Id",
+        belongs_to,
+        from = "user_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    Users,
-}
-
-impl Related<super::subscription_plans::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::SubscriptionPlans.def()
-    }
-}
-
-impl Related<super::users::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Users.def()
-    }
+    pub users: HasOne<super::users::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

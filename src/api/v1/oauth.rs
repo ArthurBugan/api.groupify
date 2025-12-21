@@ -4,7 +4,6 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::FromRow;
-use chrono::TimeZone;
 use time::OffsetDateTime;
 
 use crate::errors::AppError;

@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "users")]
 pub struct Model {
@@ -56,50 +57,16 @@ pub struct Model {
     pub deleted_at: Option<DateTime>,
     #[sea_orm(column_type = "Text", nullable)]
     pub display_name: Option<String>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::channels::Entity")]
-    Channels,
-    #[sea_orm(has_many = "super::group_members::Entity")]
-    GroupMembers,
-    #[sea_orm(has_many = "super::sessions::Entity")]
-    Sessions,
-    #[sea_orm(has_many = "super::subscription_plans_users::Entity")]
-    SubscriptionPlansUsers,
-    #[sea_orm(has_many = "super::youtube_channels::Entity")]
-    YoutubeChannels,
-}
-
-impl Related<super::channels::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Channels.def()
-    }
-}
-
-impl Related<super::group_members::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::GroupMembers.def()
-    }
-}
-
-impl Related<super::sessions::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Sessions.def()
-    }
-}
-
-impl Related<super::subscription_plans_users::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::SubscriptionPlansUsers.def()
-    }
-}
-
-impl Related<super::youtube_channels::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::YoutubeChannels.def()
-    }
+    #[sea_orm(has_many)]
+    pub channels: HasMany<super::channels::Entity>,
+    #[sea_orm(has_many)]
+    pub group_members: HasMany<super::group_members::Entity>,
+    #[sea_orm(has_many)]
+    pub sessions: HasMany<super::sessions::Entity>,
+    #[sea_orm(has_many)]
+    pub subscription_plans_users: HasMany<super::subscription_plans_users::Entity>,
+    #[sea_orm(has_many)]
+    pub youtube_channels: HasMany<super::youtube_channels::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

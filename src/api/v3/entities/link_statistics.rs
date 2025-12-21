@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "link_statistics")]
 pub struct Model {
@@ -13,24 +14,14 @@ pub struct Model {
     pub referer: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub user_agent: Option<String>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::links::Entity",
-        from = "Column::LinkId",
-        to = "super::links::Column::Id",
+        belongs_to,
+        from = "link_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    Links,
-}
-
-impl Related<super::links::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Links.def()
-    }
+    pub links: HasOne<super::links::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

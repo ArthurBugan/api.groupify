@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "subscription_plans")]
 pub struct Model {
@@ -18,18 +19,8 @@ pub struct Model {
     pub price_yearly: Decimal,
     pub created_at: Option<DateTimeWithTimeZone>,
     pub updated_at: Option<DateTimeWithTimeZone>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::subscription_plans_users::Entity")]
-    SubscriptionPlansUsers,
-}
-
-impl Related<super::subscription_plans_users::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::SubscriptionPlansUsers.def()
-    }
+    #[sea_orm(has_many)]
+    pub subscription_plans_users: HasMany<super::subscription_plans_users::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

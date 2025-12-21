@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "crunchyroll_channels")]
 pub struct Model {
@@ -51,8 +52,5 @@ pub struct Model {
     pub is_simulcast: Option<bool>,
     pub tenant_categories: Option<Vec<String>>,
 }
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
