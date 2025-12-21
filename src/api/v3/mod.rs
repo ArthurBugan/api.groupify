@@ -2,6 +2,7 @@ pub mod entities;
 pub mod animes;
 pub mod channels;
 pub mod users;
+pub mod sales;
 
 use axum::{middleware, Router};
 use axum::routing::{delete, get, patch, post, put};
