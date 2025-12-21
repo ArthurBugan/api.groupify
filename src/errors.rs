@@ -15,6 +15,9 @@ pub enum AppError {
     #[error("Database error: {0}")]
     Database(#[source] anyhow::Error),
 
+    #[error("SeaORM error: {0}")]
+    SeaORM(#[source] sea_orm::DbErr),
+
     #[error("Validation error: {0}")]
     Validation(String),
 
@@ -64,7 +67,6 @@ impl IntoResponse for AppError {
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone(), None),
             AppError::Permission(e) => (StatusCode::FORBIDDEN, format!("{}", e), None),
-            // Add this new case for Conflict errors
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone(), None),
             AppError::UrlParse(e) => (StatusCode::BAD_REQUEST, format!("Invalid URL: {}", e), None),
             AppError::Timeout(e) => (
@@ -81,6 +83,11 @@ impl IntoResponse for AppError {
                 StatusCode::BAD_REQUEST,
                 "Validation failed".to_string(),
                 Some(validation_errors.clone()),
+            ),
+            AppError::SeaORM(error) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("SeaORM error: {}", error),
+                None,
             ),
         };
 

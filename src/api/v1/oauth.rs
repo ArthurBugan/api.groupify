@@ -5,6 +5,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sqlx::FromRow;
 use chrono::TimeZone;
+use time::OffsetDateTime;
 
 use crate::errors::AppError;
 
@@ -224,6 +225,10 @@ pub async fn update_user_session(
     // First, get or create the user
     let user_id = get_or_create_user(db, email, provider).await?;
 
+    let offset_dt = OffsetDateTime::from_unix_timestamp(
+        expires_at.and_utc().timestamp()
+    ).unwrap();
+
     let _ = sqlx::query!(
         r#"
         INSERT INTO sessions (user_id, session_id, refresh_token, expires_at, provider, original_email)
@@ -237,7 +242,7 @@ pub async fn update_user_session(
         user_id,
         access_token,
         refresh_token,
-        chrono::Utc.from_utc_datetime(&expires_at),
+        offset_dt,
         provider.as_str(),
         original_email,
     )
