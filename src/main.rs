@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let _guard = init_tracing_subscriber(
         service_name,
         env_filter,
-        vec![Box::new(tracing_subscriber::fmt::layer())],
+    vec![Box::new(tracing_subscriber::fmt::layer())],
         tracer_provider,
         meter_provider,
     )?;
