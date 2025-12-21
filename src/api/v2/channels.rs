@@ -841,6 +841,7 @@ pub async fn patch_channels_batch(
 ) -> Result<Json<ApiResponse<Vec<ChannelWithGroup>>>, AppError> {
     let InnerState {
         db,
+        sea_db,
         email_client,
         oauth_clients,
         redis_cache,
@@ -877,6 +878,7 @@ pub async fn patch_channels_batch(
             cookies.clone(),
             State(InnerState {
                 db: db.clone(),
+                sea_db: sea_db.clone(),
                 email_client: email_client.clone(),
                 oauth_clients: oauth_clients.clone(),
                 redis_cache: redis_cache.clone(),

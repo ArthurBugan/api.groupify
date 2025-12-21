@@ -8,6 +8,7 @@ mod system;
 
 use crate::api::v1::routes::create_v1_routes;
 use crate::api::v2::create_v2_router;
+use crate::api::v3::create_v3_router;
 use crate::email::EmailClient;
 
 use crate::db::init_db;
@@ -23,6 +24,7 @@ use axum::http::HeaderMap;
 use axum::{Extension, Router};
 use bytes::BytesMut;
 use hyper::Method;
+use sea_orm::{Database, DatabaseConnection};
 use sqlx::PgPool;
 use std::error::Error;
 use time::Duration;
@@ -55,6 +57,7 @@ use crate::api::v1::oauth::{build_google_oauth_client, build_discord_oauth_clien
 #[derive(Clone, Debug)]
 struct InnerState {
     pub db: PgPool,
+    pub sea_db: DatabaseConnection,
     pub email_client: EmailClient,
     pub oauth_clients: OAuthClients,
     pub redis_cache: RedisCache,
@@ -103,7 +106,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         std::env::var("EMAIL")?,
     );
 
+    let database_url = std::env::var("DATABASE_URL")?;
     let db = init_db().await?;
+    let sea_db = Database::connect(&database_url).await?;
     let cfg = RedisConfig::from_url(std::env::var("REDIS_URL").unwrap());
     let redis_pool = cfg.create_pool(Some(Runtime::Tokio1)).unwrap();
     let redis_cache = RedisCache { pool: redis_pool };
@@ -124,6 +129,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let app_state = InnerState {
         db,
+        sea_db,
         email_client,
         oauth_clients: OAuthClients {
             google: google_oauth_client,
@@ -165,6 +171,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .merge(create_system_router(app_state.clone()).with_state(app_state.clone()))
         .merge(create_v1_routes(app_state.clone()).with_state(app_state.clone()))
         .merge(create_v2_router(app_state.clone()).with_state(app_state.clone()))
+        .merge(create_v3_router(app_state.clone()).with_state(app_state.clone()))
         // Apply middleware layers
         .layer(axum::middleware::from_fn(log_request_response_body))
         .layer(cors)

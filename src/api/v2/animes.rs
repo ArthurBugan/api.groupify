@@ -6,6 +6,7 @@ use anyhow::Result;
 use axum::extract::{Query, State};
 use axum::Json;
 use chrono::NaiveDateTime;
+use sea_orm::FromQueryResult;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Postgres, QueryBuilder};
 use tower_cookies::Cookies;
@@ -118,7 +119,7 @@ pub struct PatchAnimesBatchRequest {
     pub animes: Vec<PatchAnimeRequest>,
 }
 
-#[derive(Deserialize, Serialize, Debug, FromRow)]
+#[derive(Deserialize, Serialize, Debug, FromRow, FromQueryResult)]
 #[serde(rename_all = "camelCase")]
 pub struct UnifiedAnime {
     pub id: String,
