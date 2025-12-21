@@ -1,5 +1,6 @@
 pub mod entities;
 pub mod animes;
+pub mod channels;
 
 use axum::{middleware, Router};
 use axum::routing::{delete, get, patch, post, put};
@@ -16,7 +17,8 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         
     Router::new()
         .route("/api/v3/health", get(|| async { "v3 health check ok!" }))
-        .route("/api/v3/animes", get(animes::all_animes_v3)) // Add the /animes route
+        .route("/api/v3/animes", get(animes::all_animes_v3))
+        .route("/api/v3/channels/{channel_id}/batch", patch(channels::patch_channels_batch))
         .layer(CookieManagerLayer::new())
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state)

@@ -9,6 +9,7 @@ use anyhow::Result;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::NaiveDateTime;
+use sea_orm::FromQueryResult;
 use serde::{Deserialize, Serialize};
 use sqlx::{Execute, FromRow, Postgres, QueryBuilder};
 use tower_cookies::Cookies;
@@ -38,7 +39,7 @@ pub struct PaginationInfo {
     pub total_pages: i32,
 }
 /// Channel with group name for API responses
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone, FromQueryResult)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelWithGroup {
     pub id: String,
@@ -1044,7 +1045,7 @@ pub async fn delete_channel(
     );
 
     let delete_channel_timeout = tokio::time::Duration::from_millis(5000); // 5 seconds timeout
-    let InnerState { db, .. } = inner;
+    let InnerState { db, redis_cache, .. } = inner;
 
     let auth_token = cookies
         .get("auth-token")
@@ -1106,6 +1107,10 @@ pub async fn delete_channel(
                 "delete_channel: Successfully deleted channel {}",
                 channel_id
             );
+            redis_cache
+                .del_pattern(&format!("user:{}:group:*", user_id))
+                .await
+                .ok();
             Ok(ApiResponse::success(format!(
                 "Channel {} deleted successfully",
                 channel_id
@@ -1134,12 +1139,12 @@ pub async fn delete_channel(
     };
 
     let channels_pattern = format!("user:{}:channels:*", user_id);
-    if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
         tracing::warn!("delete_channel: redis DEL channels error: {:?}", e);
     }
 
     let animes_pattern = format!("user:{}:animes:*", user_id);
-    if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+    if let Err(e) = redis_cache.del_pattern(&animes_pattern).await {
         tracing::warn!("delete_channel: redis DEL animes error: {:?}", e);
     }
     Ok(Json(result.unwrap()))
