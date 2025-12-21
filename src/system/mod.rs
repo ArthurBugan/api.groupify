@@ -16,6 +16,7 @@ use crate::api::v1::login::{login_user, logout_user};
 use crate::api::v1::subscription_confirm::confirm;
 use crate::api::v1::subscriptions::subscribe;
 use crate::api::v1::user::{delete_account, get_language};
+use crate::api::v3::sales::make_sale;
 use crate::authentication::{change_password, forget_password};
 use crate::InnerState;
 
@@ -45,6 +46,8 @@ pub fn create_system_router(state: InnerState) -> Router<InnerState> {
 
         .route("/auth/discord", get(discord_login))
         .route("/auth/discord_callback", get(discord_callback))
+
+        .route("/sale", post(make_sale))
 
         .with_state(state)
 }

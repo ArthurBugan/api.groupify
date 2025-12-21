@@ -1769,6 +1769,39 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1a46d1a171d865aa5f83f92695765caa047a9b4cbae2cbf37dbd613a793fd4c"
 
 [[package]]
+name = "jiff"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49cce2b81f2098e7e3efc35bc2e0a6b7abec9d34128283d7a26fa8f32a6dbb35"
+dependencies = [
+ "jiff-static",
+ "portable-atomic",
+ "portable-atomic-util",
+]
+
+[[package]]
+name = "jiff-sqlx"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cad0aaf716e798876e02217ae420bd730370a175ffd59870018c4aa4daa1513e"
+dependencies = [
+ "jiff",
+ "sqlx-core",
+ "sqlx-postgres",
+]
+
+[[package]]
+name = "jiff-static"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "980af8b43c3ad5d8d349ace167ec8170839f753a42d233ba19e08afe1850fa69"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
 name = "jobserver"
 version = "0.1.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2385,6 +2418,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
+name = "pluralizer"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b3eba432a00a1f6c16f39147847a870e94e2e9b992759b503e330efec778cbe"
+dependencies = [
+ "once_cell",
+ "regex",
+]
+
+[[package]]
 name = "polling"
 version = "3.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2404,6 +2447,15 @@ name = "portable-atomic"
 version = "1.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f59e70c4aef1e55797c2e8fd94a4f2a973fc972cfde0e0b05f683667b0cd39dd"
+
+[[package]]
+name = "portable-atomic-util"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "potential_utf"
@@ -2703,6 +2755,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4722d768eff46b75989dd134e5c353f0d6296e5aaa3132e776cbdb56be7731aa"
 dependencies = [
  "bitflags 1.3.2",
+]
+
+[[package]]
+name = "regex"
+version = "1.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "843bc0191f75f3e22651ae5f1e72939ab2f72a4bc30fa80a066bd66edefc24d4"
+dependencies = [
+ "aho-corasick",
+ "memchr",
+ "regex-automata",
+ "regex-syntax",
 ]
 
 [[package]]
@@ -3053,9 +3117,9 @@ dependencies = [
 
 [[package]]
 name = "sea-orm"
-version = "1.1.19"
+version = "2.0.0-rc.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d945f62558fac19e5988680d2fdf747b734c2dbc6ce2cb81ba33ed8dde5b103"
+checksum = "38cb08645b287dde889794834dedbcb706cfabb2c5e4239b2828ddc8cd32f84d"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3063,13 +3127,15 @@ dependencies = [
  "chrono",
  "derive_more",
  "futures-util",
+ "itertools",
  "log",
  "ouroboros",
  "pgvector",
  "rust_decimal",
  "sea-orm-macros",
  "sea-query",
- "sea-query-binder",
+ "sea-query-sqlx",
+ "sea-schema",
  "serde",
  "serde_json",
  "sqlx",
@@ -3083,11 +3149,12 @@ dependencies = [
 
 [[package]]
 name = "sea-orm-macros"
-version = "1.1.19"
+version = "2.0.0-rc.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84c2e64a50a9cc8339f10a27577e10062c7f995488e469f2c95762c5ee847832"
+checksum = "d51b5590506f1fc2eeed63966f8d9ab28c0bd7c25853a1fa5e427560af4b1cce"
 dependencies = [
  "heck 0.5.0",
+ "pluralizer",
  "proc-macro2",
  "quote",
  "sea-bae",
@@ -3097,34 +3164,75 @@ dependencies = [
 
 [[package]]
 name = "sea-query"
-version = "0.32.7"
+version = "1.0.0-rc.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a5d1c518eaf5eda38e5773f902b26ab6d5e9e9e2bb2349ca6c64cf96f80448c"
+checksum = "8edd21d591f27a3b6dda2093cc27b324eda2f8b34906bcbe534621188b60e96a"
 dependencies = [
  "bigdecimal",
  "chrono",
  "inherent",
  "ordered-float",
  "rust_decimal",
+ "sea-query-derive",
  "serde_json",
  "time",
  "uuid",
 ]
 
 [[package]]
-name = "sea-query-binder"
-version = "0.7.0"
+name = "sea-query-derive"
+version = "1.0.0-rc.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0019f47430f7995af63deda77e238c17323359af241233ec768aba1faea7608"
+checksum = "365d236217f5daa4f40d3c9998ff3921351b53472da50308e384388162353b3a"
+dependencies = [
+ "darling",
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "sea-query-sqlx"
+version = "0.8.0-rc.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f3c45d0fefde032a4cb0938901eb702b20430881a6de7f6b3664f46373978f00"
 dependencies = [
  "bigdecimal",
  "chrono",
+ "jiff-sqlx",
  "rust_decimal",
  "sea-query",
  "serde_json",
  "sqlx",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "sea-schema"
+version = "0.17.0-rc.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b363dd21c20fe4d1488819cb2bc7f8d4696c62dd9f39554f97639f54d57dd0ab"
+dependencies = [
+ "async-trait",
+ "sea-query",
+ "sea-query-sqlx",
+ "sea-schema-derive",
+ "sqlx",
+]
+
+[[package]]
+name = "sea-schema-derive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "debdc8729c37fdbf88472f97fd470393089f997a909e535ff67c544d18cfccf0"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -3623,9 +3731,9 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "strum"
-version = "0.26.3"
+version = "0.27.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fec0f0aef304996cf250b31b5a10dee7980c85da9d759361292b8bca5a18f06"
+checksum = "af23d6f6c1a224baef9d3f61e287d2761385a5b88fdab4eb4c6f11aeb54c4bcf"
 
 [[package]]
 name = "subtle"

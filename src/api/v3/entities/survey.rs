@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "survey")]
 pub struct Model {
@@ -9,8 +10,5 @@ pub struct Model {
     pub id: i32,
     pub survey_text: String,
 }
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

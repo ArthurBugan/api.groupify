@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "share_links")]
 pub struct Model {
@@ -15,24 +16,14 @@ pub struct Model {
     pub permission: Option<String>,
     pub created_at: Option<DateTime>,
     pub expires_at: Option<DateTime>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
     #[sea_orm(
-        belongs_to = "super::groups::Entity",
-        from = "Column::GroupId",
-        to = "super::groups::Column::Id",
+        belongs_to,
+        from = "group_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    Groups,
-}
-
-impl Related<super::groups::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Groups.def()
-    }
+    pub groups: HasOne<super::groups::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

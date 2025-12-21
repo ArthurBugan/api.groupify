@@ -9,6 +9,8 @@ pub use super::links::Entity as Links;
 pub use super::sessions::Entity as Sessions;
 pub use super::settings::Entity as Settings;
 pub use super::share_links::Entity as ShareLinks;
+pub use super::subscription_plans::Entity as SubscriptionPlans;
+pub use super::subscription_plans_users::Entity as SubscriptionPlansUsers;
 pub use super::survey::Entity as Survey;
 pub use super::users::Entity as Users;
 pub use super::youtube_channels::Entity as YoutubeChannels;

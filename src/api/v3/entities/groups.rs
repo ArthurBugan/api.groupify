@@ -2,6 +2,7 @@
 
 use sea_orm::entity::prelude::*;
 
+#[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "groups")]
 pub struct Model {
@@ -24,56 +25,29 @@ pub struct Model {
     pub display_order: Option<f64>,
     #[sea_orm(column_type = "Text", nullable)]
     pub parent_id: Option<String>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(has_many = "super::channels::Entity")]
-    Channels,
-    #[sea_orm(has_many = "super::group_members::Entity")]
-    GroupMembers,
+    #[sea_orm(has_many)]
+    pub channels: HasMany<super::channels::Entity>,
+    #[sea_orm(has_many)]
+    pub group_members: HasMany<super::group_members::Entity>,
     #[sea_orm(
-        belongs_to = "Entity",
-        from = "Column::ParentId",
-        to = "Column::Id",
+        self_ref,
+        relation_enum = "SelfRef",
+        from = "parent_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    SelfRef,
+    pub groups: HasOne<Entity>,
     #[sea_orm(
-        belongs_to = "super::links::Entity",
-        from = "Column::UserId",
-        to = "super::links::Column::Id",
+        belongs_to,
+        from = "user_id",
+        to = "id",
         on_update = "NoAction",
         on_delete = "NoAction"
     )]
-    Links,
-    #[sea_orm(has_many = "super::share_links::Entity")]
-    ShareLinks,
-}
-
-impl Related<super::channels::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Channels.def()
-    }
-}
-
-impl Related<super::group_members::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::GroupMembers.def()
-    }
-}
-
-impl Related<super::links::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::Links.def()
-    }
-}
-
-impl Related<super::share_links::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::ShareLinks.def()
-    }
+    pub links: HasOne<super::links::Entity>,
+    #[sea_orm(has_many)]
+    pub share_links: HasMany<super::share_links::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

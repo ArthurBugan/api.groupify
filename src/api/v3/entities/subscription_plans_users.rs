@@ -4,37 +4,31 @@ use sea_orm::entity::prelude::*;
 
 #[sea_orm::model]
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "group_members")]
+#[sea_orm(table_name = "subscription_plans_users")]
 pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
-    pub id: String,
-    #[sea_orm(
-        column_type = "Text",
-        unique_key = "group_members_group_id_user_id_key"
-    )]
-    pub group_id: String,
-    #[sea_orm(
-        column_type = "Text",
-        unique_key = "group_members_group_id_user_id_key"
-    )]
+    #[sea_orm(primary_key)]
+    pub id: i32,
+    #[sea_orm(column_type = "Text")]
     pub user_id: String,
-    pub role: String,
+    pub subscription_plan_id: i32,
+    pub started_at: Option<DateTimeWithTimeZone>,
+    pub ended_at: Option<DateTimeWithTimeZone>,
     pub created_at: Option<DateTimeWithTimeZone>,
     pub updated_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
-        from = "group_id",
+        from = "subscription_plan_id",
         to = "id",
         on_update = "NoAction",
-        on_delete = "Cascade"
+        on_delete = "NoAction"
     )]
-    pub groups: HasOne<super::groups::Entity>,
+    pub subscription_plans: HasOne<super::subscription_plans::Entity>,
     #[sea_orm(
         belongs_to,
         from = "user_id",
         to = "id",
         on_update = "NoAction",
-        on_delete = "Cascade"
+        on_delete = "NoAction"
     )]
     pub users: HasOne<super::users::Entity>,
 }
