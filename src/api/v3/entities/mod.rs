@@ -11,6 +11,8 @@ pub mod links;
 pub mod sessions;
 pub mod settings;
 pub mod share_links;
+pub mod subscription_plans;
+pub mod subscription_plans_users;
 pub mod survey;
 pub mod users;
 pub mod youtube_channels;

@@ -9,14 +9,14 @@ pub struct Model {
     pub id: String,
     pub created_at: Option<DateTime>,
     pub updated_at: Option<DateTime>,
-    #[sea_orm(column_type = "Text")]
+    #[sea_orm(column_type = "Text", primary_key, auto_increment = false)]
     pub group_id: String,
     #[sea_orm(column_type = "Text")]
     pub name: String,
     #[sea_orm(column_type = "Text")]
     pub thumbnail: String,
     pub new_content: Option<bool>,
-    #[sea_orm(column_type = "Text")]
+    #[sea_orm(column_type = "Text", primary_key, auto_increment = false)]
     pub user_id: String,
     #[sea_orm(column_type = "Text", nullable)]
     pub channel_id: Option<String>,

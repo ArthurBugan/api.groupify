@@ -66,6 +66,8 @@ pub enum Relation {
     GroupMembers,
     #[sea_orm(has_many = "super::sessions::Entity")]
     Sessions,
+    #[sea_orm(has_many = "super::subscription_plans_users::Entity")]
+    SubscriptionPlansUsers,
     #[sea_orm(has_many = "super::youtube_channels::Entity")]
     YoutubeChannels,
 }
@@ -85,6 +87,12 @@ impl Related<super::group_members::Entity> for Entity {
 impl Related<super::sessions::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Sessions.def()
+    }
+}
+
+impl Related<super::subscription_plans_users::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::SubscriptionPlansUsers.def()
     }
 }
 
