@@ -21,7 +21,7 @@ pub struct SalePayload {
     pub short_product_id: String,
     pub product_name: String,
     pub email: String,
-    pub url_params: HashMap<String, String>,
+    pub url_params: Option<HashMap<String, String>>,
     pub full_name: Option<String>,
     pub purchaser_id: Option<String>,
     pub subscription_id: Option<String>,
