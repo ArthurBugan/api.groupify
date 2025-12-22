@@ -1,4 +1,4 @@
-use axum::{extract::State, Json};
+use axum::{Form, Json, extract::State};
 use serde::{Deserialize, Serialize};
 use tracing;
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ pub struct SalePayload {
 #[tracing::instrument(name = "Make a sale", skip(inner, payload))]
 pub async fn make_sale(
     State(inner): State<InnerState>,
-    Json(payload): Json<SalePayload>,
+    Form(payload): Form<SalePayload>,
 ) -> Result<Json<ApiResponse<String>>, AppError> {
     // Log the received payload for tracing purposes.
     // In a real application, you would typically process this sale data,
