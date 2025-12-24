@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{extract::State, Json};
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use rust_decimal::Decimal;
 use sea_orm::{
     ColumnTrait, EntityTrait, FromQueryResult, QueryFilter,
@@ -78,7 +78,11 @@ pub async fn me(
 
     let current = subscription_plans_users
         .into_iter()
-        .find(|(sub_user, _)| sub_user.ended_at.is_none());
+        .find(|(sub_user, _)| {
+            sub_user
+                .ended_at
+                .map_or(true, |end_date| end_date > Utc::now().fixed_offset())
+        });
 
     if let Some((active_subscription, Some(plan))) = current {
         println!(
