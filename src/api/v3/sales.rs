@@ -32,7 +32,7 @@ pub struct SalePayload {
     pub custom_fields: Option<HashMap<String, String>>,
 
     #[serde(rename = "custom_fields[user_id]")]
-    pub user_id: Option<String>,
+    pub user_id: String,
 
     pub full_name: Option<String>,
     pub purchaser_id: Option<String>,
@@ -75,17 +75,17 @@ pub async fn make_sale(
 
     // 1. Find or create user
     let user = match users::Entity::find()
-        .filter(users::Column::Email.eq(&payload.email))
+        .filter(users::Column::Email.eq(&payload.user_id))
         .one(&txn)
         .await
         .map_err(AppError::SeaORM)?
     {
         Some(u) => u,
         None => {
-            tracing::warn!("User not found for email: {}", payload.email);
+            tracing::warn!("User not found for user_id: {}", payload.user_id);
             return Err(AppError::NotFound(format!(
-                "User not found for email: {}",
-                payload.email
+                "User not found for user_id: {}",
+                payload.user_id
             )));
         }
     };
