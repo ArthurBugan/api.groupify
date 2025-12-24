@@ -2,12 +2,12 @@ use axum::{Form, Json, extract::State};
 use serde::{Deserialize, Serialize};
 use tracing;
 use std::collections::HashMap;
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Utc};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use uuid::Uuid;
 
 use crate::{
-    api::common::ApiResponse,
-    errors::AppError,
-    InnerState,
+    InnerState, api::{common::ApiResponse, v3::entities::{subscription_plans, subscription_plans_users, users}}, errors::AppError
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -21,7 +21,16 @@ pub struct SalePayload {
     pub short_product_id: String,
     pub product_name: String,
     pub email: String,
+
+    #[serde(default)]
     pub url_params: Option<HashMap<String, String>>,
+
+    #[serde(default)]
+    pub custom_fields: Option<HashMap<String, String>>,
+
+    #[serde(rename = "custom_fields[user_id]")]
+    pub user_id: Option<String>,
+
     pub full_name: Option<String>,
     pub purchaser_id: Option<String>,
     pub subscription_id: Option<String>,
@@ -31,7 +40,6 @@ pub struct SalePayload {
     pub variants: Option<HashMap<String, String>>,
     pub offer_code: Option<String>,
     pub test: bool,
-    pub custom_fields: Option<HashMap<String, String>>,
     pub shipping_information: Option<HashMap<String, String>>,
     pub is_recurring_charge: Option<bool>,
     pub is_preorder_authorization: Option<bool>,
@@ -57,10 +65,68 @@ pub async fn make_sale(
     Form(payload): Form<SalePayload>,
 ) -> Result<Json<ApiResponse<String>>, AppError> {
     // Log the received payload for tracing purposes.
-    // In a real application, you would typically process this sale data,
-    // e.g., save it to a database, trigger other business logic, etc.
     tracing::info!("Received sale payload: {:?}", payload);
 
-    // For now, we'll just return a success response indicating the payload was received.
-    Ok(Json(ApiResponse::success("Sale processed successfully".to_string())))
+    let db = &inner.sea_db;
+    let txn = db.begin().await.map_err(AppError::SeaORM)?;
+
+    // 1. Find or create user
+    let user = match users::Entity::find()
+        .filter(users::Column::Email.eq(&payload.email))
+        .one(&txn)
+        .await
+        .map_err(AppError::SeaORM)?
+    {
+        Some(u) => u,
+        None => {
+            tracing::warn!("User not found for email: {}", payload.email);
+            return Err(AppError::NotFound(format!(
+                "User not found for email: {}",
+                payload.email
+            )));
+        }
+    };
+
+    // 2. Find or create subscription plan
+    let subscription_plan = match subscription_plans::Entity::find()
+        .filter(subscription_plans::Column::Name.eq(&payload.product_name))
+        .one(&txn)
+        .await
+        .map_err(AppError::SeaORM)?
+    {
+        Some(p) => p,
+        None => {
+            tracing::warn!("Subscription plan not found for product: {}", payload.product_name);
+            return Err(AppError::NotFound(format!(
+                "Subscription plan not found for product: {}",
+                payload.product_name
+            )));
+        }
+    };
+
+    // 3. Create subscription_plans_users entry
+    tracing::info!(
+        "Assigning plan {} to user {}",
+        subscription_plan.name,
+        user.email
+    );
+    let new_subscription_user = subscription_plans_users::ActiveModel {
+        user_id: Set(user.id.clone()),
+        subscription_plan_id: Set(subscription_plan.id),
+        started_at: Set(Some(payload.sale_timestamp)),
+        created_at: Set(Some(Utc::now().fixed_offset())),
+        updated_at: Set(Some(Utc::now().fixed_offset())),
+        ..Default::default()
+    };
+    new_subscription_user
+        .insert(&txn)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    txn.commit().await.map_err(AppError::SeaORM)?;
+
+    Ok(Json(ApiResponse::success(
+        "Sale processed and subscription assigned successfully".to_string(),
+    )))
 }
+
