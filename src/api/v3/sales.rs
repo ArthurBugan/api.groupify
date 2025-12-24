@@ -22,6 +22,9 @@ pub struct SalePayload {
     pub product_name: String,
     pub email: String,
 
+    #[serde(rename = "url_params[url_params[user_id]] ")]
+    pub user_id_params: Option<String>,
+
     #[serde(default)]
     pub url_params: Option<HashMap<String, String>>,
 
