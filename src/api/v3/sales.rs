@@ -75,7 +75,7 @@ pub async fn make_sale(
 
     // 1. Find or create user
     let user = match users::Entity::find()
-        .filter(users::Column::Email.eq(&payload.user_id))
+        .filter(users::Column::Id.eq(&payload.user_id))
         .one(&txn)
         .await
         .map_err(AppError::SeaORM)?
