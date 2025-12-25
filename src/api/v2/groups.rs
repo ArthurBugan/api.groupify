@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tower_cookies::Cookies;
 use uuid::Uuid;
+use crate::api::common::limits::enforce_group_creation_limit;
 
 use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
 use crate::api::v2::channels::{all_channels_by_group_id, all_count_by_channel_id, ChannelWithGroup};
@@ -531,6 +532,8 @@ pub async fn create_group(
     tracing::debug!("Extracting email from auth token");
     let user_id = get_user_id_from_token(auth_token).await?;
     tracing::info!("Successfully extracted user_id for user: {}", user_id);
+
+    enforce_group_creation_limit(&db, &user_id, payload.parent_id.is_some()).await?;
 
     // Validate parent group if provided
     if let Some(parent_id) = &payload.parent_id {

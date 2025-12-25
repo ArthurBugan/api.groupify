@@ -1,3 +1,4 @@
+use crate::api::common::limits::enforce_channel_addition_limit;
 use crate::api::common::utils::timeout_query;
 use crate::api::common::ApiResponse;
 use crate::api::v1::channel::Channel;
@@ -38,6 +39,7 @@ pub struct PaginationInfo {
     pub limit: i32,
     pub total_pages: i32,
 }
+
 /// Channel with group name for API responses
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone, FromQueryResult)]
 #[serde(rename_all = "camelCase")]
@@ -131,8 +133,12 @@ pub async fn all_channels(
         .await
     {
         if let Some(cached_response) = cached {
-            tracing::debug!("all_channels: returning cached page {}", page);
-            return Ok(Json(cached_response));
+            if cached_response.data.is_empty() {
+                tracing::debug!("all_channels: cache hit but empty payload for page {}, skipping cache", page);
+            } else {
+                tracing::debug!("all_channels: returning cached page {}", page);
+                return Ok(Json(cached_response));
+            }
         }
     }
 
@@ -393,6 +399,8 @@ pub async fn patch_channel(
             return Err(e);
         }
     };
+
+    enforce_channel_addition_limit(&db.clone(), &user_id, &payload.group_id.clone(), 1).await?;
 
     // First, check if the channel exists at all
     let channel_exists =
@@ -868,7 +876,6 @@ pub async fn patch_channels_batch(
             return Err(e);
         }
     };
-
     delete_channels_by_group_id(&db.clone(), &group_id, &user_id).await?;
 
     let mut updated_channels = Vec::new();

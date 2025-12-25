@@ -3,7 +3,7 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use sea_orm::{DatabaseConnection, DbBackend, FromQueryResult, QueryResult, Statement};
+use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, JoinType, QueryFilter, QuerySelect, RelationTrait, sea_query::Expr};
 use tower_cookies::Cookies;
 
 use crate::{
@@ -12,6 +12,7 @@ use crate::{
         v2::animes::{
             AnimePaginationParams, PaginatedAnimesResponse, PaginationInfo, UnifiedAnime,
         },
+        v3::entities::{channels, crunchyroll_channels, groups},
     },
     errors::AppError,
     InnerState,
@@ -59,103 +60,89 @@ pub async fn all_animes_v3(
         return Ok(Json(cached));
     }
 
-    // === Build dynamic SQL ===
-    let mut sql = r#"
-    SELECT
-        COALESCE(ch.id, c.id)                       AS id,
-        ch.user_id                                 AS user_id,
-        ch.group_id                                AS group_id,
-        'anime'                                    AS content_type,
-        COALESCE(ch.name, c.title)                 AS name,
-        COALESCE(ch.channel_id, c.channel_id)      AS channel_id,
-        COALESCE(ch.thumbnail, c.poster_image_url) AS thumbnail,
-        ch.created_at                              AS created_at,
-        ch.updated_at                              AS updated_at,
-        COALESCE(g.name, c.title)                  AS group_name,
-        g.icon                                     AS group_icon,
-        COALESCE(ch.url, c.id)                     AS url
-    FROM crunchyroll_channels c
-    LEFT JOIN channels ch
-        ON ch.name = c.title
-       AND ch.content_type = 'anime'
-    LEFT JOIN users u
-        ON u.id = ch.user_id
-    LEFT JOIN groups g
-        ON g.id = ch.group_id
-"#
-    .to_string();
-
-    let mut values: Vec<sea_orm::Value> = vec![user_id.clone().into()];
-    let mut bind_index = 2;
+    let mut channels_q = channels::Entity::find()
+        .filter(channels::Column::UserId.eq(user_id.clone()))
+        .filter(channels::Column::ContentType.eq("anime"))
+        .join(JoinType::LeftJoin, channels::Relation::Groups.def())
+        .select_only()
+        .column(channels::Column::Id)
+        .column(channels::Column::UserId)
+        .column(channels::Column::GroupId)
+        .column(channels::Column::Name)
+        .expr_as(Expr::cust("COALESCE(channels.channel_id, '')"), "channel_id")
+        .column(channels::Column::Thumbnail)
+        .column(channels::Column::CreatedAt)
+        .column(channels::Column::UpdatedAt)
+        .column_as(groups::Column::Name, "group_name")
+        .column_as(groups::Column::Icon, "group_icon")
+        .column(channels::Column::Url)
+        .column(channels::Column::ContentType)
+        .expr_as(Expr::cust("NULL"), "average_rating");
 
     if let Some(search) = &params.search {
         if !search.trim().is_empty() {
-            sql.push_str(&format!(" WHERE COALESCE(c.title, ch.name) ILIKE ${}", bind_index));
-            values.push(format!("%{}%", search).into());
-            bind_index += 1;
+            channels_q = channels_q.filter(channels::Column::Name.ilike(format!("%{}%", search)));
         }
     }
 
-    sql.push_str(&format!(
-        " ORDER BY name DESC LIMIT ${} OFFSET ${}",
-        bind_index,
-        bind_index + 1
-    ));
-
-    values.push(limit.into());
-    values.push(offset.into());
-
-    let stmt = Statement::from_sql_and_values(DbBackend::Postgres, sql, values);
-
-    let animes = UnifiedAnime::find_by_statement(stmt)
+    let user_animes: Vec<UnifiedAnime> = channels_q
+        .into_model::<UnifiedAnime>()
         .all(&sea_db)
         .await
         .map_err(AppError::SeaORM)?;
 
-    // === Count query ===
-    let mut count_sql = r#"
-        SELECT COUNT(*) AS count FROM (
-            SELECT ch.id, ch.name
-            FROM channels ch
-            INNER JOIN users u ON u.id = ch.user_id
-            WHERE u.id = $1
-
-            UNION ALL
-
-            SELECT c.id, c.title AS name
-            FROM crunchyroll_channels c
-        ) AS combined
-    "#
-    .to_string();
-
-    let mut count_values: Vec<sea_orm::Value> = vec![user_id.into()];
-    let mut count_bind = 2;
+    let mut crunchy_q = crunchyroll_channels::Entity::find()
+        .select_only()
+        .column(crunchyroll_channels::Column::Id)
+        .expr_as(Expr::cust("NULL"), "user_id")
+        .expr_as(Expr::cust("NULL"), "group_id")
+        .column_as(crunchyroll_channels::Column::Title, "name")
+        .expr_as(Expr::cust("COALESCE(crunchyroll_channels.channel_id, '')"), "channel_id")
+        .column_as(crunchyroll_channels::Column::PosterImageUrl, "thumbnail")
+        .expr_as(Expr::cust("NULL"), "created_at")
+        .expr_as(Expr::cust("NULL"), "updated_at")
+        .column_as(crunchyroll_channels::Column::Title, "group_name")
+        .expr_as(Expr::cust("NULL"), "group_icon")
+        .column_as(crunchyroll_channels::Column::Id, "url")
+        .expr_as(Expr::cust("'anime'"), "content_type")
+        .column_as(crunchyroll_channels::Column::AverageRating, "average_rating")
+        .filter(crunchyroll_channels::Column::Title.is_not_null())
+        .filter(Expr::cust(format!(
+            "NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.content_type = 'anime' AND c2.user_id = '{}' AND c2.name = crunchyroll_channels.title)",
+            user_id
+        )));
 
     if let Some(search) = &params.search {
         if !search.trim().is_empty() {
-            count_sql.push_str(&format!(" WHERE name ILIKE ${}", count_bind));
-            count_values.push(format!("%{}%", search).into());
+            crunchy_q = crunchy_q.filter(crunchyroll_channels::Column::Title.ilike(format!("%{}%", search)));
         }
     }
 
-    #[derive(FromQueryResult)]
-    struct CountResult {
-        count: i64,
-    }
-
-    let count_stmt = Statement::from_sql_and_values(DbBackend::Postgres, count_sql, count_values);
-
-    let total_count = CountResult::find_by_statement(count_stmt)
-        .one(&sea_db)
+    let crunchy_animes: Vec<UnifiedAnime> = crunchy_q
+        .into_model::<UnifiedAnime>()
+        .all(&sea_db)
         .await
-        .map_err(AppError::SeaORM)?
-        .map(|r| r.count)
-        .unwrap_or(0);
+        .map_err(AppError::SeaORM)?;
+
+    let mut combined = Vec::with_capacity(user_animes.len() + crunchy_animes.len());
+    combined.extend(user_animes);
+    combined.extend(crunchy_animes);
+
+    combined.sort_by(|a, b| {
+        let ar = a.average_rating.unwrap_or(0.0);
+        let br = b.average_rating.unwrap_or(0.0);
+        br.partial_cmp(&ar).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let total_count = combined.len() as i64;
+    let start = offset as usize;
+    let end = (start + limit as usize).min(combined.len());
+    let page_data = if start < combined.len() { combined[start..end].to_vec() } else { Vec::new() };
 
     let total_pages = ((total_count as f64) / (limit as f64)).ceil() as i32;
 
     let response = PaginatedAnimesResponse {
-        data: animes,
+        data: page_data,
         pagination: PaginationInfo {
             total: total_count,
             page,
