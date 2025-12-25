@@ -199,8 +199,7 @@ pub async fn get_user_id_from_email(
     let id = sqlx::query_as::<_, User>(r#" SELECT * FROM users WHERE email = $1"#)
         .bind(email)
         .fetch_one(pool)
-        .await
-        .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to get user id from email")))?
+        .await?
         .id
         .ok_or_else(|| AppError::NotFound("User ID not found for email".to_string()))?;
 
