@@ -9,6 +9,7 @@ use tower_cookies::Cookies;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, ExprTrait, Iterable, QueryFilter, QuerySelect, RelationTrait, Set
 };
+use crate::api::common::limits::enforce_channel_addition_limit;
 
 use crate::{
     api::{
@@ -63,6 +64,7 @@ pub async fn patch_channels_batch(
         GroupChannelPermission::Admin => user_id.clone(),
     };
 
+    enforce_channel_addition_limit(&db.clone(), &user_id, &group_id, payload.channels.len() as i64).await?;
     delete_missing_channels_by_group_id(&sea_db, &group_id, &user_id, &incoming_ids).await?;
 
     let mut updated_channels = Vec::with_capacity(payload.channels.len());

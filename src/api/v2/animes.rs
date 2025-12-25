@@ -119,7 +119,7 @@ pub struct PatchAnimesBatchRequest {
     pub animes: Vec<PatchAnimeRequest>,
 }
 
-#[derive(Deserialize, Serialize, Debug, FromRow, FromQueryResult)]
+#[derive(Deserialize, Serialize, Debug, Clone, FromRow, FromQueryResult)]
 #[serde(rename_all = "camelCase")]
 pub struct UnifiedAnime {
     pub id: String,
@@ -133,6 +133,7 @@ pub struct UnifiedAnime {
     pub updated_at: Option<NaiveDateTime>,
     pub group_name: Option<String>,
     pub group_icon: Option<String>,
+    pub average_rating: Option<f64>,
     pub url: Option<String>,
 }
 
