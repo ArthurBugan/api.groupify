@@ -15,6 +15,7 @@ use crate::api::{
 };
 use crate::{errors::AppError, InnerState};
 use futures::future::BoxFuture;
+use crate::api::common::limits::enforce_group_sharing_allowed;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -58,7 +59,7 @@ pub async fn generate_share_link(
     State(inner): State<InnerState>,
     cookies: Cookies,
     Json(payload): Json<GenerateShareLinkRequest>,
-) -> Json<ApiResponse<GenerateShareLinkResponse>> {
+) -> Result<Json<ApiResponse<GenerateShareLinkResponse>>, AppError> {
     let InnerState { db, .. } = inner;
 
     let auth_token = cookies
@@ -68,14 +69,12 @@ pub async fn generate_share_link(
 
     if auth_token.is_empty() {
         tracing::warn!("generate_share_link: Missing authentication token");
-        return Json(ApiResponse::error(
-            "Missing authentication token".to_string(),
-        ));
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing authentication token")));
     }
 
     let user_id = match crate::api::v1::user::get_user_id_from_token(auth_token).await {
         Ok(id) => id,
-        Err(e) => return Json(ApiResponse::error(format!("Authentication error: {}", e))),
+        Err(e) => return Err(AppError::Authentication(anyhow::anyhow!(format!("Authentication error: {}", e)))),
     };
 
     // Check if the user is the owner of the group or has admin role
@@ -95,7 +94,7 @@ pub async fn generate_share_link(
         Ok(exists) => exists,
         Err(e) => {
             tracing::error!("Failed to check group ownership or admin role: {:?}", e);
-            return Json(ApiResponse::error(format!("Database error: {}", e)));
+            return Err(AppError::from(e));
         }
     };
 
@@ -105,9 +104,13 @@ pub async fn generate_share_link(
             user_id,
             payload.group_id
         );
-        return Json(ApiResponse::error(
-            "You do not have permission to generate a share link for this group.".to_string(),
-        ));
+        return Err(AppError::Permission(anyhow::anyhow!(
+            "You do not have permission to generate a share link for this group."
+        )));
+    }
+
+    if let Err(e) = enforce_group_sharing_allowed(&db, &user_id).await {
+        return Err(e);
     }
 
     let share_link_id = Uuid::new_v4().to_string(); // Generate UUID for id
@@ -137,7 +140,7 @@ pub async fn generate_share_link(
                 link_code,
                 e
             );
-            return Json(ApiResponse::error(format!("Database error: {}", e)));
+            return Err(AppError::from(e));
         }
     };
 
@@ -148,9 +151,9 @@ pub async fn generate_share_link(
         new_share_link.link_code
     );
 
-    Json(ApiResponse::success(GenerateShareLinkResponse {
+    Ok(Json(ApiResponse::success(GenerateShareLinkResponse {
         share_link: share_link_url,
-    }))
+    })))
 }
 
 #[tracing::instrument(name = "Get share link details", skip(inner))]

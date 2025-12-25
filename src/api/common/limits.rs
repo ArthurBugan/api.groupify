@@ -113,3 +113,36 @@ pub async fn enforce_group_creation_limit(
 
     Ok(())
 }
+
+pub async fn enforce_group_sharing_allowed(
+    db: &sqlx::PgPool,
+    user_id: &str,
+) -> Result<(), AppError> {
+    let plan_name = sqlx::query_scalar::<_, String>(
+        r#"SELECT sp.name
+           FROM subscription_plans_users spu
+           INNER JOIN subscription_plans sp ON sp.id = spu.subscription_plan_id
+           WHERE spu.user_id = $1
+             AND (spu.ended_at IS NULL OR spu.ended_at > CURRENT_TIMESTAMP)
+           ORDER BY spu.started_at DESC
+           LIMIT 1"#
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to fetch subscription plan name")))?;
+
+    match plan_name {
+        Some(name) => {
+            let lname = name.to_lowercase();
+            let allowed = lname.contains("basic") || lname.contains("pro");
+            if !allowed {
+                return Err(AppError::Permission(anyhow::anyhow!(
+                    "Current plan does not allow sharing groups"
+                )));
+            }
+            Ok(())
+        }
+        None => Err(AppError::NotFound("No active subscription plan found".to_string())),
+    }
+}
