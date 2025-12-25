@@ -7,7 +7,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName};
 use axum::http::{StatusCode};
 use axum::Json;
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, Utc};
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -15,7 +15,7 @@ use sqlx::{Executor, FromRow, PgPool, Postgres, Transaction};
 use tower_cookies::Cookies;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
     pub id: Option<String>,
@@ -81,7 +81,10 @@ pub async fn create_user(
         return Err(AppError::Conflict(format!("User with email '{}' already exists", user.email)));
     }
 
-    let password_hash = compute_password_hash(user.encrypted_password.unwrap()).await?;
+    let password_hash = match user.encrypted_password {
+        Some(password) => Some(compute_password_hash(password).await?),
+        None => None,
+    };
 
     let query = sqlx::query!(
         r#"INSERT INTO users (id, email, encrypted_password) VALUES ($1, $2, $3)"#,
@@ -120,7 +123,25 @@ pub async fn create_user(
         AppError::Database(anyhow::Error::from(e).context("Failed to create user"))
     })?;
 
-    tracing::info!("Successfully created user with id: {}", uuid);
+    // Assign the new user to subscription_plan_id 1
+    let default_plan_id = 1;
+    let now = time::OffsetDateTime::now_utc();
+    sqlx::query!(
+        r#"INSERT INTO subscription_plans_users (user_id, subscription_plan_id, started_at, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)"#,
+        uuid,
+        default_plan_id,
+        now,
+        now,
+        now
+    )
+    .execute(&mut **transaction)
+    .await
+    .map_err(|e| {
+        tracing::error!("Failed to assign default subscription to new user: {}", e);
+        AppError::Database(anyhow::Error::from(e).context("Failed to assign default subscription"))
+    })?;
+
+    tracing::info!("Successfully created user with id: {} and assigned to default plan {}", uuid, default_plan_id);
     Ok(uuid)
 }
 

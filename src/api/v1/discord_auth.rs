@@ -12,7 +12,8 @@ use crate::{
         common::{utils::setup_auth_cookie, ApiResponse},
         v1::{
             login::generate_token,
-            oauth::{fetch_user_profile, update_user_session, AuthRequest, OAuthProvider, Session}, user::{get_email_from_original_email, get_email_from_token, get_user_id_from_email},
+            oauth::{fetch_user_profile, update_user_session, AuthRequest, OAuthProvider, Session},
+            user::{create_user, get_email_from_token, get_user_id_from_email, User},
         },
     },
     errors::AppError,
@@ -74,18 +75,37 @@ pub async fn discord_callback(
         .map(|c| c.value().to_string())
         .unwrap_or_default();
 
-    let email;
-    let original_email;
+    let original_email = user_profile.email.clone();
 
-    if auth_token.is_empty() {
-        tracing::info!("No auth-token found, using user profile email: {}", user_profile.email);
-        original_email = user_profile.email.clone();
-        email = get_email_from_original_email(&db, &original_email.clone()).await?;
+    let email = if auth_token.is_empty() {
+        tracing::info!("No auth-token found, using Discord profile email: {}", original_email);
+        original_email.clone()
     } else {
         tracing::info!("Auth-token found, using token to get email: {}", auth_token);
-        email = get_email_from_token(auth_token).await?;
-        original_email = user_profile.email.clone();
-    }
+        get_email_from_token(auth_token).await?
+    };
+
+    let user_id = match get_user_id_from_email(&db, &email).await {
+        Ok(id) => id,
+        Err(AppError::NotFound(_)) => {
+            tracing::info!("User not found for email {}. Creating user from Discord callback.", email);
+            let new_user = User {
+                id: None,
+                email: email.clone(),
+                encrypted_password: None,
+                ..Default::default()
+            };
+            let mut transaction = db.begin().await.map_err(|e| {
+                AppError::Database(anyhow::Error::from(e).context("Failed to start transaction"))
+            })?;
+            let id = create_user(&mut transaction, new_user).await?;
+            transaction.commit().await.map_err(|e| {
+                AppError::Database(anyhow::Error::from(e).context("Failed to commit transaction"))
+            })?;
+            id
+        }
+        Err(e) => return Err(e),
+    };
 
     tracing::info!("Updating user session for: {:?} and original_email {:?}", email, original_email);
 
