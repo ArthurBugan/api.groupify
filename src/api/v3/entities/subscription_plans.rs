@@ -13,6 +13,7 @@ pub struct Model {
     pub max_channels: i32,
     pub max_groups: i32,
     pub can_create_subgroups: bool,
+    pub can_share_groups: bool,
     #[sea_orm(column_type = "Decimal(Some((10, 2)))")]
     pub price_monthly: Decimal,
     #[sea_orm(column_type = "Decimal(Some((10, 2)))")]
