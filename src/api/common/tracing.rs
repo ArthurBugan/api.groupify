@@ -17,6 +17,11 @@ pub fn make_custom_span<B>(request: &Request<B>) -> Span {
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
+    let correlation_id = request
+        .headers()
+        .get("x-correlation-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown");
 
     tracing::debug!("Creating custom span for request: {}", request_id);
 
@@ -27,6 +32,7 @@ pub fn make_custom_span<B>(request: &Request<B>) -> Span {
         query = ?request.uri().query(),
         version = ?request.version(),
         request_id = request_id,
+        correlation_id = correlation_id,
         user_agent = ?request.headers().get("user-agent"),
         content_type = ?request.headers().get("content-type"),
         content_length = ?request.headers().get("content-length"),
