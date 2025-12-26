@@ -7,7 +7,7 @@ use axum::{
     middleware, routing::{delete, get, patch, post, put}, Router
 };
 
-use crate::{api::common::middleware::auth_middleware, InnerState};
+use crate::{InnerState, api::{common::middleware::auth_middleware, v1::user::update_password}};
 use crate::api::v1::channel::{all_channels, all_channels_by_group, create_channel, update_channels_in_group, fetch_youtube_channels, save_youtube_channels};
 use crate::api::v1::group::{all_groups, create_group, delete_group, update_group};
 use crate::api::v1::link_shortner::{create_link, get_link_statistics, redirect, update_link};
@@ -60,6 +60,8 @@ pub fn create_v1_routes(state: InnerState) -> Router<InnerState> {
         // New Discord OAuth routes
         .route("/auth/check-discord-session", get(check_discord_session))
         .route("/auth/disconnect-discord", delete(disconnect_discord))
+
+        .route("/auth/update_password", patch(update_password))
 
         .route("/me", get(me))
         .layer(middleware::from_fn(auth_middleware))
