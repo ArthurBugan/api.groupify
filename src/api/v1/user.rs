@@ -1,5 +1,6 @@
 use crate::api::v1::oauth::Session;
 use crate::authentication::compute_password_hash;
+use crate::authentication::password::{validate_credentials, Credentials};
 use crate::api::v1::login::Claims;
 use crate::errors::AppError; // Added
 use crate::InnerState;
@@ -7,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName};
 use axum::http::{StatusCode};
 use axum::Json;
-use chrono::{NaiveDateTime, Utc};
+use chrono::{NaiveDateTime};
 use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -52,6 +53,14 @@ pub struct User {
     pub deleted_at: Option<NaiveDateTime>,
     pub display_name: Option<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePasswordRequest {
+    pub password: String,
+    pub password_confirmation: String,
+}
+
 
 #[tracing::instrument(name = "Saving new user in the database", skip(user, transaction), err)]
 pub async fn create_user(
@@ -286,6 +295,23 @@ pub async fn delete_account(
         .await
         .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to delete channels")))?;
 
+    sqlx::query!(
+        r#"
+        DELETE FROM share_links
+        WHERE group_id IN (
+            SELECT id FROM groups WHERE user_id = $1
+        )
+        "#,
+        user_id
+    )
+    .execute(&db)
+    .await
+    .map_err(|e| {
+        AppError::Database(
+            anyhow::Error::from(e).context("Failed to delete share_links for user's groups")
+        )
+    })?;
+
     sqlx::query!("DELETE FROM groups WHERE user_id = $1", &user_id)
         .execute(&db)
         .await
@@ -296,6 +322,12 @@ pub async fn delete_account(
         .await
         .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to delete youtube_channels")))?;
 
+
+    sqlx::query!("DELETE FROM subscription_plans_users WHERE user_id = $1", &user_id)
+        .execute(&db)
+        .await
+        .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to delete subscription_plans_users")))?;
+
     sqlx::query!("DELETE FROM sessions WHERE user_id = $1", &user_id)
         .execute(&db)
         .await
@@ -305,6 +337,40 @@ pub async fn delete_account(
         .execute(&db)
         .await
         .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to delete user")))?;
+
+    Ok(Json(json!({ "success": "true" })))
+}
+
+
+#[tracing::instrument(name = "Update user password", skip(cookies, inner, payload))]
+pub async fn update_password(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Json(payload): Json<UpdatePasswordRequest>,
+) -> Result<Json<Value>, AppError> {
+    let InnerState { db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .ok_or_else(|| AppError::Unexpected(anyhow::anyhow!("Missing auth-token cookie")))?;
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+    let creds = Credentials { email: user_id.clone(), password: payload.password.clone() };
+
+    let password_hash = compute_password_hash(payload.password_confirmation).await?;
+
+    sqlx::query!(
+        r#"UPDATE users
+           SET encrypted_password = $1,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2"#,
+        password_hash,
+        user_id
+    )
+    .execute(&db)
+    .await
+    .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to update password")))?;
 
     Ok(Json(json!({ "success": "true" })))
 }

@@ -58,7 +58,7 @@ pub async fn validate_credentials(
             if user.encrypted_password.is_none() {
                 tracing::warn!("User {} has no encrypted password", credentials.email);
                 return Err(AppError::NotFound(
-                    "Login with Google or Discord".to_string(),
+                    "Please use Google or Discord to login.".to_string(),
                 ));
             }
 
