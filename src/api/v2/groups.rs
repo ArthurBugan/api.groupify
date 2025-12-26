@@ -484,6 +484,10 @@ pub async fn update_display_order(
             if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
                 tracing::warn!("update_display_order: redis DEL groups error: {:?}", e);
             }
+            let group_pattern = format!("user:{}:group:*", user_id);
+            if let Err(e) = inner.redis_cache.del_pattern(&group_pattern).await {
+                tracing::warn!("update_display_order: redis DEL group error: {:?}", e);
+            }
             Ok(Json(UpdateDisplayOrderResponse {
                 success: true,
                 message: format!(
@@ -735,6 +739,18 @@ pub async fn create_group(
     let groups_pattern = format!("user:{}:groups:*", user_id);
     if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
         tracing::warn!("create_group: redis DEL groups error: {:?}", e);
+    }
+    let group_pattern = format!("user:{}:group:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&group_pattern).await {
+        tracing::warn!("create_group: redis DEL group error: {:?}", e);
+    }
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("create_group: redis DEL channels error: {:?}", e);
+    }
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("create_group: redis DEL animes error: {:?}", e);
     }
     Ok(Json(CreateGroupResponse {
         success: true,
@@ -1007,6 +1023,18 @@ pub async fn delete_group(
                 let groups_pattern = format!("user:{}:groups:*", user_id);
                 if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
                     tracing::warn!("delete_group: redis DEL groups error: {:?}", e);
+                }
+                let group_pattern = format!("user:{}:group:*", user_id);
+                if let Err(e) = inner.redis_cache.del_pattern(&group_pattern).await {
+                    tracing::warn!("delete_group: redis DEL group error: {:?}", e);
+                }
+                let channels_pattern = format!("user:{}:channels:*", user_id);
+                if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+                    tracing::warn!("delete_group: redis DEL channels error: {:?}", e);
+                }
+                let animes_pattern = format!("user:{}:animes:*", user_id);
+                if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+                    tracing::warn!("delete_group: redis DEL animes error: {:?}", e);
                 }
 
                 tx.commit().await?;
@@ -1329,6 +1357,18 @@ pub async fn update_group(
     let groups_pattern = format!("user:{}:groups:*", user_id);
     if let Err(e) = inner.redis_cache.del_pattern(&groups_pattern).await {
         tracing::warn!("update_group: redis DEL groups error: {:?}", e);
+    }
+    let group_pattern = format!("user:{}:group:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&group_pattern).await {
+        tracing::warn!("update_group: redis DEL group error: {:?}", e);
+    }
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("update_group: redis DEL channels error: {:?}", e);
+    }
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("update_group: redis DEL animes error: {:?}", e);
     }
 
     Ok(Json(CreateGroupResponse {
