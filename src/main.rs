@@ -20,7 +20,7 @@ use crate::api::common::body_logger::log_request_response_body;
 use anyhow::Result;
 use axum::extract::FromRef;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderName};
 use axum::{Extension, Router};
 use bytes::BytesMut;
 use hyper::Method;
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Method::DELETE,
             Method::PATCH,
         ])
-        .allow_headers([CONTENT_TYPE])
+        .allow_headers([CONTENT_TYPE, HeaderName::from_static("x-correlation-id"), HeaderName::from_static("x-request-id")])
         .allow_origin(origins)
         .allow_credentials(true);
 
