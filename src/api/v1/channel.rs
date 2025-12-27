@@ -24,6 +24,7 @@ pub struct Channel {
     pub name: String,
     pub thumbnail: String,
     pub new_content: Option<bool>,
+    pub content_type: String,
     pub url: Option<String>,
     pub user_id: String,
 }
