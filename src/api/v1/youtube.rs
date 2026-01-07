@@ -173,7 +173,7 @@ pub async fn sync_channels_from_youtube(
             })?;
 
         if !channels_req.status().is_success() {
-            tracing::error!("YouTube API error: {:?}", channels_req.status());
+            tracing::error!("YouTube API error: {:?}, body: {:?}", channels_req.status(), channels_req.text().await);
             return Err(AppError::Validation(String::from("Could not get the channels list")));
         }
 
