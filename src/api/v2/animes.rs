@@ -135,6 +135,7 @@ pub struct UnifiedAnime {
     pub group_icon: Option<String>,
     pub average_rating: Option<f64>,
     pub url: Option<String>,
+    pub launch_year: Option<i32>,
 }
 
 #[tracing::instrument(name = "Get all animes", skip(cookies, inner))]
