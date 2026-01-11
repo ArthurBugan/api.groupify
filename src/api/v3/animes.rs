@@ -77,7 +77,8 @@ pub async fn all_animes_v3(
         .column_as(groups::Column::Icon, "group_icon")
         .column(channels::Column::Url)
         .column(channels::Column::ContentType)
-        .expr_as(Expr::cust("NULL"), "average_rating");
+        .expr_as(Expr::cust("NULL"), "average_rating")
+        .expr_as(Expr::cust("NULL"), "launch_year");
 
     if let Some(search) = &params.search {
         if !search.trim().is_empty() {
@@ -106,6 +107,7 @@ pub async fn all_animes_v3(
         .column_as(crunchyroll_channels::Column::Id, "url")
         .expr_as(Expr::cust("'anime'"), "content_type")
         .column_as(crunchyroll_channels::Column::AverageRating, "average_rating")
+        .column(crunchyroll_channels::Column::LaunchYear)
         .filter(crunchyroll_channels::Column::Title.is_not_null())
         .filter(Expr::cust(format!(
             "NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.content_type = 'anime' AND c2.user_id = '{}' AND c2.name = crunchyroll_channels.title)",
@@ -129,6 +131,12 @@ pub async fn all_animes_v3(
     combined.extend(crunchy_animes);
 
     combined.sort_by(|a, b| {
+        let ay = a.launch_year.unwrap_or(0);
+        let by = b.launch_year.unwrap_or(0);
+        let year_cmp = by.cmp(&ay);
+        if year_cmp != std::cmp::Ordering::Equal {
+            return year_cmp;
+        }
         let ar = a.average_rating.unwrap_or(0.0);
         let br = b.average_rating.unwrap_or(0.0);
         br.partial_cmp(&ar).unwrap_or(std::cmp::Ordering::Equal)
