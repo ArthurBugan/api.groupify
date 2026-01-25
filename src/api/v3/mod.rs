@@ -4,9 +4,10 @@ pub mod channels;
 pub mod groups;
 pub mod users;
 pub mod sales;
+pub mod blog;
 
 use axum::{middleware, Router};
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{get, patch};
 use tower_cookies::CookieManagerLayer;
 
 use crate::InnerState;
