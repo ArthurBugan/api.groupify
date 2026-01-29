@@ -15,6 +15,8 @@ pub struct BlogQueryParams {
     pub featured: Option<bool>,
     #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub search: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -64,6 +66,14 @@ pub async fn get_blog_posts(
 
     if let Some(featured) = params.featured {
         filters.push(format!("{{\"featured\":{{\"_eq\":{}}}}}", featured));
+    }
+
+    // Add search filter if provided
+    if let Some(search_term) = params.search {
+        filters.push(format!(
+            "{{\"_or\":[{{\"title\":{{\"_icontains\":\"{}\"}}}},{{\"description\":{{\"_icontains\":\"{}\"}}}}]}}",
+            search_term, search_term
+        ));
     }
 
     if !filters.is_empty() {
@@ -130,19 +140,45 @@ pub async fn get_blog_posts(
                     "https://coolify.groupify.dev/directus/assets/{}",
                     blog_post.image
                 );
-                debug!(
-                    "Prefixed image URL for post {}: {}",
-                    blog_post.id, blog_post.image
-                );
             }
 
             Some(blog_post)
         })
         .collect();
 
+    // Get total count of all posts in the collection (without filters)
+    let total_count_response = client
+        .get("https://coolify.groupify.dev/directus/items/posts?aggregate[count]=id")
+        .send()
+        .await
+        .map_err(|e| {
+            error!("Failed to fetch total post count from Directus: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let total_count: usize = if total_count_response.status().is_success() {
+        let count_data: Value = total_count_response.json().await.map_err(|e| {
+            error!("Failed to parse total count JSON response: {}", e);
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        info!("Total count data: {:?}", count_data);
+        
+        // Handle both string and number formats from Directus
+        match count_data["data"][0]["count"]["id"].as_str() {
+            Some(count_str) => count_str.parse().unwrap_or(0),
+            None => count_data["data"][0]["count"]["id"]
+                .as_u64()
+                .unwrap_or(0) as usize,
+        }
+    } else {
+        warn!("Failed to get total post count from Directus, using filtered count as fallback");
+        posts.len()
+    };
+
     Ok(Json(BlogResponse {
-        data: posts.clone(),
-        total: posts.len(),
+        data: posts,
+        total: total_count,
     }))
 }
 
@@ -213,10 +249,6 @@ pub async fn get_blog_post_by_slug(
         blog_post.image = format!(
             "https://coolify.groupify.dev/directus/assets/{}",
             blog_post.image
-        );
-        debug!(
-            "Prefixed image URL for post {} (slug: {}): {}",
-            blog_post.id, slug, blog_post.image
         );
     }
 
