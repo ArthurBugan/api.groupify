@@ -12,6 +12,8 @@ pub struct BlogQueryParams {
     #[serde(default)]
     pub category: Option<String>,
     #[serde(default)]
+    pub page: Option<i32>,
+    #[serde(default)]
     pub featured: Option<bool>,
     #[serde(default)]
     pub limit: Option<usize>,
@@ -45,6 +47,7 @@ pub struct BlogResponse {
 }
 
 /// Fetch blog posts from Directus CMS
+#[tracing::instrument(name = "Get v3 get_blog_posts")]
 pub async fn get_blog_posts(
     Query(params): Query<BlogQueryParams>,
 ) -> Result<Json<BlogResponse>, axum::http::StatusCode> {
@@ -82,6 +85,11 @@ pub async fn get_blog_posts(
 
     if let Some(limit) = params.limit {
         query_params.insert("limit", limit.to_string());
+    }
+
+    // Add pagination - Directus uses page parameter for pagination
+    if let Some(page) = params.page {
+        query_params.insert("page", page.to_string());
     }
 
     // Add sorting by date_created descending
@@ -146,13 +154,22 @@ pub async fn get_blog_posts(
         })
         .collect();
 
-    // Get total count of all posts in the collection (without filters)
+    // Get total count of posts with current filters (including search)
+    let mut count_query_params = query_params.clone();
+    count_query_params.insert("aggregate", "count".to_string());
+    count_query_params.insert("fields", "id".to_string());
+    
+    // Remove pagination and limit for count query
+    count_query_params.remove("page");
+    count_query_params.remove("limit");
+
     let total_count_response = client
-        .get("https://coolify.groupify.dev/directus/items/posts?aggregate[count]=id")
+        .get("https://coolify.groupify.dev/directus/items/posts")
+        .query(&count_query_params)
         .send()
         .await
         .map_err(|e| {
-            error!("Failed to fetch total post count from Directus: {}", e);
+            error!("Failed to fetch filtered post count from Directus: {}", e);
             axum::http::StatusCode::INTERNAL_SERVER_ERROR
         })?;
 
