@@ -154,18 +154,8 @@ pub async fn get_blog_posts(
         })
         .collect();
 
-    // Get total count of posts with current filters (including search)
-    let mut count_query_params = query_params.clone();
-    count_query_params.insert("aggregate", "count".to_string());
-    count_query_params.insert("fields", "id".to_string());
-    
-    // Remove pagination and limit for count query
-    count_query_params.remove("page");
-    count_query_params.remove("limit");
-
     let total_count_response = client
-        .get("https://coolify.groupify.dev/directus/items/posts")
-        .query(&count_query_params)
+        .get("https://coolify.groupify.dev/directus/items/posts?aggregate[count]=*")
         .send()
         .await
         .map_err(|e| {
@@ -182,9 +172,9 @@ pub async fn get_blog_posts(
         info!("Total count data: {:?}", count_data);
         
         // Handle both string and number formats from Directus
-        match count_data["data"][0]["count"]["id"].as_str() {
+        match count_data["data"][0]["count"].as_str() {
             Some(count_str) => count_str.parse().unwrap_or(0),
-            None => count_data["data"][0]["count"]["id"]
+            None => count_data["data"][0]["count"]
                 .as_u64()
                 .unwrap_or(0) as usize,
         }
