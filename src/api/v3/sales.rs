@@ -4,7 +4,6 @@ use tracing;
 use std::collections::HashMap;
 use chrono::{DateTime, FixedOffset, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
-use uuid::Uuid;
 
 use crate::{
     InnerState, api::{common::ApiResponse, v3::entities::{subscription_plans, subscription_plans_users, users}}, errors::AppError

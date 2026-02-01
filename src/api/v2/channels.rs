@@ -58,7 +58,7 @@ pub struct ChannelWithGroup {
     pub url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PatchChannelRequest {
     pub id: String,
