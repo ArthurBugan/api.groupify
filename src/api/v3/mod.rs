@@ -2,12 +2,13 @@ pub mod entities;
 pub mod animes;
 pub mod channels;
 pub mod groups;
+pub mod share_links;
 pub mod users;
 pub mod sales;
 pub mod blog;
 
 use axum::{middleware, Router};
-use axum::routing::{get, patch};
+use axum::routing::{delete, get, patch, post};
 use tower_cookies::CookieManagerLayer;
 
 use crate::InnerState;
@@ -24,6 +25,10 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/animes", get(animes::all_animes_v3))
         .route("/api/v3/groups", get(groups::all_groups_v3))
         .route("/api/v3/channels/{channel_id}/batch", patch(channels::patch_channels_batch))
+        .route("/api/v3/share-links", get(share_links::list_share_links))
+        .route("/api/v3/share-links", post(share_links::create_share_link))
+        .route("/api/v3/share-links/{share_link_id}", patch(share_links::update_share_link))
+        .route("/api/v3/share-links/{share_link_id}", delete(share_links::delete_share_link))
         .route("/api/v3/me", get(users::me))
         .layer(CookieManagerLayer::new())
         .layer(middleware::from_fn(auth_middleware))

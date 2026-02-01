@@ -23,7 +23,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, FromQueryResult)]
-struct GroupRow {
+struct GroupWithCountRow {
     pub id: String,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
@@ -35,15 +35,10 @@ struct GroupRow {
     pub parent_id: Option<String>,
     pub nesting_level: Option<i32>,
     pub display_order: Option<f64>,
+    pub channel_count: Option<i64>,
 }
 
-#[derive(Debug, Clone, FromQueryResult)]
-struct GroupChannelCountRow {
-    pub group_id: String,
-    pub channel_count: i64,
-}
-
-#[tracing::instrument(name = "Get all groups v3 (SeaORM)", skip(cookies, inner))]
+#[tracing::instrument(name = "Get all groups v3 (Optimized)", skip(cookies, inner))]
 pub async fn all_groups_v3(
     cookies: Cookies,
     State(inner): State<InnerState>,
@@ -89,6 +84,7 @@ pub async fn all_groups_v3(
         .add(groups::Column::UserId.eq(user_id.clone()))
         .add(group_members::Column::UserId.eq(user_id.clone()));
 
+    // Count query remains the same
     let mut count_q = groups::Entity::find()
         .join(JoinType::LeftJoin, groups::Relation::GroupMembers.def())
         .filter(base_access.clone());
@@ -113,14 +109,16 @@ pub async fn all_groups_v3(
         .map_err(AppError::SeaORM)?;
 
     let total_result = total_result_u64.try_into().unwrap();
-
     let total_pages = ((total_result as f64) / (limit as f64)).ceil() as u32;
     let has_next = page < total_pages;
     let has_prev = page > 1;
+    
     let order_expr = Expr::cust(
         "CASE WHEN groups.display_order = 0 OR groups.display_order IS NULL THEN 100 ELSE 0 END",
     );
 
+    // OPTIMIZATION: Single query with subquery for channel counts
+    // This eliminates the need for a second query to get channel counts
     let mut data_q = groups::Entity::find()
         .join(JoinType::LeftJoin, groups::Relation::GroupMembers.def())
         .filter(base_access)
@@ -136,6 +134,16 @@ pub async fn all_groups_v3(
         .column(groups::Column::ParentId)
         .column(groups::Column::NestingLevel)
         .column(groups::Column::DisplayOrder)
+        // Use a correlated subquery to get channel count in the same query
+        .expr_as(
+            Expr::cust(
+                format!(
+                    "COALESCE((SELECT COUNT(*) FROM channels c WHERE c.group_id = groups.id AND c.user_id = '{}'), 0)",
+                    user_id
+                )
+            ),
+            "channel_count"
+        )
         .expr_as(order_expr.clone(), "order_rank")
         .order_by(Expr::cust("order_rank"), Order::Asc)
         .distinct()
@@ -153,40 +161,16 @@ pub async fn all_groups_v3(
         }
     }
 
-    let rows: Vec<GroupRow> = data_q
-        .into_model::<GroupRow>()
+    let rows: Vec<GroupWithCountRow> = data_q
+        .into_model::<GroupWithCountRow>()
         .all(&sea_db)
         .await
         .map_err(AppError::SeaORM)?;
 
-    let group_ids: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
-
-    let channel_counts: Vec<GroupChannelCountRow> = if group_ids.is_empty() {
-        Vec::new()
-    } else {
-        channels::Entity::find()
-            .select_only()
-            .column(channels::Column::GroupId)
-            .expr_as(Expr::cust("COUNT(*)"), "channel_count")
-            .filter(channels::Column::UserId.eq(user_id.clone()))
-            .filter(channels::Column::GroupId.is_in(group_ids))
-            .group_by(channels::Column::GroupId)
-            .into_model::<GroupChannelCountRow>()
-            .all(&sea_db)
-            .await
-            .map_err(AppError::SeaORM)?
-    };
-
-    let channel_count_map: HashMap<String, i64> = channel_counts
+    // Map directly to Group without needing a second query or HashMap
+    let out: Vec<Group> = rows
         .into_iter()
-        .map(|r| (r.group_id, r.channel_count))
-        .collect();
-
-    let mut out: Vec<Group> = Vec::with_capacity(rows.len());
-    for row in rows {
-        let channel_count = channel_count_map.get(&row.id).copied().unwrap_or(0);
-
-        out.push(Group {
+        .map(|row| Group {
             id: Some(row.id),
             created_at: row.created_at,
             updated_at: row.updated_at,
@@ -198,10 +182,10 @@ pub async fn all_groups_v3(
             parent_id: row.parent_id,
             nesting_level: row.nesting_level,
             display_order: row.display_order,
-            channel_count: Some(channel_count),
+            channel_count: Some(row.channel_count.unwrap_or(0)),
             channels: Vec::new(),
-        });
-    }
+        })
+        .collect();
 
     let response = PaginatedResponse {
         data: out,
