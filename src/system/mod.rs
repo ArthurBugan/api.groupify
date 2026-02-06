@@ -9,7 +9,7 @@ use axum::{
 };
 
 
-use crate::api::v1::auth::{google_callback, google_login};
+use crate::api::{v1::auth::{google_callback, google_login}, v3::sales::make_ml_sale};
 use crate::api::v1::discord_auth::{discord_callback, discord_login};
 
 use crate::api::v1::login::{login_user, logout_user};
@@ -49,6 +49,7 @@ pub fn create_system_router(state: InnerState) -> Router<InnerState> {
         .route("/auth/discord_callback", get(discord_callback))
 
         .route("/sale", post(make_sale))
+        .route("/ml-sale", post(make_ml_sale))
 
         .route("/api/v3/blog", get(get_blog_posts))
         .route("/api/v3/blog/{slug}", get(get_blog_post_by_slug))

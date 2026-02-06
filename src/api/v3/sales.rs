@@ -10,6 +10,19 @@ use crate::{
 };
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct MLSaleWebhookPayload {
+    pub action: String,
+    pub application_id: String,
+    pub data: HashMap<String, String>,
+    pub date: String,
+    pub entity: String,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub version: i32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct SalePayload {
     pub sale_id: String,
     pub sale_timestamp: DateTime<FixedOffset>,
@@ -120,6 +133,7 @@ pub async fn make_sale(
         updated_at: Set(Some(Utc::now().fixed_offset())),
         ..Default::default()
     };
+
     new_subscription_user
         .insert(&txn)
         .await
@@ -132,3 +146,28 @@ pub async fn make_sale(
     )))
 }
 
+pub async fn make_ml_sale(
+    State(inner): State<InnerState>,
+    Json(payload): Json<MLSaleWebhookPayload>,
+) -> Result<Json<ApiResponse<String>>, AppError> {
+    // Log the received ML sale webhook payload for tracing purposes
+    tracing::info!("Received ML sale webhook payload: {:#?}", payload);
+    
+    // Extract specific fields for detailed logging
+    tracing::info!(
+        "ML Sale Details - Action: {}, Entity: {}, Event Type: {}, ID: {}",
+        payload.action,
+        payload.entity,
+        payload.event_type,
+        payload.id
+    );
+    
+    // Log the data field contents
+    if !payload.data.is_empty() {
+        tracing::info!("ML Sale Data: {:?}", payload.data);
+    }
+
+    Ok(Json(ApiResponse::success(
+        "ML sale webhook processed successfully".to_string(),
+    )))
+}
