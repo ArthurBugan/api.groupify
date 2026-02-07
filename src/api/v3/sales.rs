@@ -1,12 +1,17 @@
-use axum::{Form, Json, extract::State};
-use serde::{Deserialize, Serialize};
-use tracing;
-use std::collections::HashMap;
+use axum::{extract::State, Form, Json};
 use chrono::{DateTime, FixedOffset, Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use tracing;
 
 use crate::{
-    InnerState, api::{common::ApiResponse, v3::entities::{subscription_plans, subscription_plans_users, users}}, errors::AppError
+    api::{
+        common::ApiResponse,
+        v3::entities::{subscription_plans, subscription_plans_users, users},
+    },
+    errors::AppError,
+    InnerState,
 };
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -111,7 +116,10 @@ pub async fn make_sale(
     {
         Some(p) => p,
         None => {
-            tracing::warn!("Subscription plan not found for product: {}", payload.product_name);
+            tracing::warn!(
+                "Subscription plan not found for product: {}",
+                payload.product_name
+            );
             return Err(AppError::NotFound(format!(
                 "Subscription plan not found for product: {}",
                 payload.product_name
@@ -152,7 +160,7 @@ pub async fn make_ml_sale(
 ) -> Result<Json<ApiResponse<String>>, AppError> {
     // Log the received ML sale webhook payload for tracing purposes
     tracing::info!("Received ML sale webhook payload: {:#?}", payload);
-    
+
     // Extract specific fields for detailed logging
     tracing::info!(
         "ML Sale Details - Action: {}, Entity: {}, Event Type: {}, ID: {}",
@@ -161,10 +169,119 @@ pub async fn make_ml_sale(
         payload.event_type,
         payload.id
     );
-    
+
     // Log the data field contents
     if !payload.data.is_empty() {
         tracing::info!("ML Sale Data: {:?}", payload.data);
+    }
+
+    // Handle different event types
+    match payload.event_type.as_str() {
+        "subscription_authorized_payment" => {
+            tracing::info!("Processing subscription authorized payment for user");
+
+            // Extract user ID from data - adjust this based on your actual data structure
+            let user_id = payload
+                .data
+                .get("user_id")
+                .or_else(|| payload.data.get("id"))
+                .ok_or_else(|| {
+                    tracing::error!("User ID not found in ML sale data: {:?}", payload.data);
+                    AppError::BadRequest("User ID not found in sale data".to_string())
+                })?;
+
+            // Extract product/plan information - adjust based on your data structure
+            let product_name = payload
+                .data
+                .get("product_name")
+                .or_else(|| payload.data.get("plan_name"))
+                .ok_or_else(|| {
+                    tracing::error!("Product name not found in ML sale data: {:?}", payload.data);
+                    AppError::BadRequest("Product/Plan name not found in sale data".to_string())
+                })?;
+
+            // Create subscription similar to make_sale function
+            let db = &inner.sea_db;
+            let txn = db.begin().await.map_err(AppError::SeaORM)?;
+
+            // 1. Find user
+            let user = match users::Entity::find()
+                .filter(users::Column::Id.eq(user_id))
+                .one(&txn)
+                .await
+                .map_err(AppError::SeaORM)?
+            {
+                Some(u) => u,
+                None => {
+                    tracing::warn!("User not found for user_id: {}", user_id);
+                    return Err(AppError::NotFound(format!(
+                        "User not found for user_id: {}",
+                        user_id
+                    )));
+                }
+            };
+
+            // 2. Find or create subscription plan
+            let subscription_plan = match subscription_plans::Entity::find()
+                .filter(subscription_plans::Column::Name.eq(product_name))
+                .one(&txn)
+                .await
+                .map_err(AppError::SeaORM)?
+            {
+                Some(p) => p,
+                None => {
+                    tracing::warn!("Subscription plan not found for product: {}", product_name);
+                    return Err(AppError::NotFound(format!(
+                        "Subscription plan not found for product: {}",
+                        product_name
+                    )));
+                }
+            };
+
+            // 3. Create subscription_plans_users entry
+            tracing::info!(
+                "Assigning plan {} to user {} from ML sale",
+                subscription_plan.name,
+                user.email
+            );
+
+            let new_subscription_user = subscription_plans_users::ActiveModel {
+                user_id: Set(user.id.clone()),
+                subscription_plan_id: Set(subscription_plan.id),
+                started_at: Set(Some(Utc::now().fixed_offset())),
+                created_at: Set(Some(Utc::now().fixed_offset())),
+                updated_at: Set(Some(Utc::now().fixed_offset())),
+                ..Default::default()
+            };
+
+            new_subscription_user
+                .insert(&txn)
+                .await
+                .map_err(AppError::SeaORM)?;
+
+            txn.commit().await.map_err(AppError::SeaORM)?;
+
+            tracing::info!(
+                "Subscription successfully created for user {} from ML sale",
+                user_id
+            );
+        }
+
+        "subscription_preapproval" | "subscription_preapproval_plan" => {
+            tracing::info!(
+                "Processing {} event - no subscription creation needed",
+                payload.event_type
+            );
+            // Handle preapproval events - typically just logging or validation
+        }
+
+        _ => {
+            tracing::warn!("Unknown ML sale event type: {}", payload.event_type);
+            return Err(AppError::BadRequest(format!(
+                "Unknown event type: {}",
+                payload.event_type
+            )));
+        }
     }
 
     Ok(Json(ApiResponse::success(
