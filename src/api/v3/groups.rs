@@ -301,8 +301,8 @@ pub async fn create_channel_in_group(
         )));
     }
 
-    // Generate unique channel ID
-    let channel_id = format!("{}/{}", user_id, Uuid::new_v4());
+    // Generate unique channel ID from user_id and url
+    let channel_id = format!("{}/{}", user_id, payload.url.clone().unwrap_or_default());
     let now = chrono::Utc::now().naive_utc();
 
     // Create the channel
