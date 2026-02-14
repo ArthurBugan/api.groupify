@@ -1,20 +1,23 @@
 use anyhow::Result;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     Json,
 };
 use chrono::NaiveDateTime;
 use sea_orm::{
-    sea_query::Expr, ColumnTrait, Condition, EntityTrait, FromQueryResult, JoinType, Order,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait,
+    sea_query::Expr, ActiveModelTrait, ColumnTrait, Condition, EntityTrait, FromQueryResult, JoinType, Order,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RelationTrait, Set,
 };
+use serde::Deserialize;
 use std::collections::HashMap;
 use tower_cookies::Cookies;
+use uuid::Uuid;
 
 use crate::{
     api::{
-        common::{PaginatedResponse, PaginationInfo, PaginationParams},
+        common::{ApiResponse, PaginatedResponse, PaginationInfo, PaginationParams},
         v1::user::get_user_id_from_token,
+        v2::channels::ChannelWithGroup,
         v2::groups::Group,
         v3::entities::{channels, group_members, groups},
     },
@@ -202,4 +205,152 @@ pub async fn all_groups_v3(
     let _ = redis_cache.set_json(&cache_key, &response, 300).await;
 
     Ok(Json(response))
+}
+
+/// Request to create a new channel in a group
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateChannelRequest {
+    pub channel_id: Option<String>, // Optional: if provided, will look up existing channel
+    pub name: String,
+    pub thumbnail: Option<String>,
+    pub url: Option<String>,
+    pub content_type: Option<String>,
+}
+
+/// Create a new channel in a group
+#[tracing::instrument(name = "Create channel in group v3", skip(cookies, inner, payload))]
+pub async fn create_channel_in_group(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(group_id): Path<String>,
+    Json(payload): Json<CreateChannelRequest>,
+) -> Result<Json<ApiResponse<ChannelWithGroup>>, AppError> {
+    let InnerState { sea_db, db, .. } = inner;
+
+    // Authenticate user
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    // Check if channel_id is provided - look up existing channel via GET /api/v2/channels/{id} logic
+    let target_group_id = if let Some(channel_id) = payload.channel_id {
+        tracing::info!("Looking up existing channel {} to get group data", channel_id);
+        
+        // Replicate GET /api/v2/channels/{id} logic using SeaORM
+        let existing_channel = channels::Entity::find()
+            .filter(channels::Column::Id.eq(&channel_id))
+            .filter(channels::Column::UserId.eq(&user_id))
+            .one(&sea_db)
+            .await
+            .map_err(AppError::SeaORM)?;
+        
+        if let Some(channel) = existing_channel {
+            if let existing_group_id = channel.group_id {
+                tracing::info!(
+                    "Channel {} is already in group {}. Using that group.",
+                    channel_id,
+                    existing_group_id
+                );
+                existing_group_id
+            } else {
+                tracing::info!(
+                    "Channel {} exists but has no group. Using provided group_id {}.",
+                    channel_id,
+                    group_id
+                );
+                group_id
+            }
+        } else {
+            tracing::warn!("Channel {} not found. Using provided group_id.", channel_id);
+            group_id
+        }
+    } else {
+        group_id
+    };
+
+    // Verify user has access to the target group
+    let group = groups::Entity::find()
+        .filter(groups::Column::Id.eq(&target_group_id))
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+        .ok_or_else(|| AppError::NotFound(format!("Group {} not found", target_group_id)))?;
+
+    // Check if user is the owner or a member of the group
+    let has_access = group.user_id == user_id || {
+        group_members::Entity::find()
+            .filter(group_members::Column::GroupId.eq(&target_group_id))
+            .filter(group_members::Column::UserId.eq(&user_id))
+            .one(&sea_db)
+            .await
+            .map_err(AppError::SeaORM)?
+            .is_some()
+    };
+
+    if !has_access {
+        return Err(AppError::Permission(anyhow::anyhow!(
+            "You don't have permission to add channels to this group"
+        )));
+    }
+
+    // Generate unique channel ID
+    let channel_id = format!("{}/{}", user_id, Uuid::new_v4());
+    let now = chrono::Utc::now().naive_utc();
+
+    // Create the channel
+    let new_channel = channels::ActiveModel {
+        id: Set(channel_id.clone()),
+        group_id: Set(target_group_id.clone()),
+        user_id: Set(user_id.clone()),
+        name: Set(payload.name),
+        thumbnail: Set(payload.thumbnail.unwrap_or_default()),
+        created_at: Set(Some(now)),
+        updated_at: Set(Some(now)),
+        new_content: Set(Some(false)),
+        channel_id: Set(Some(channel_id.clone())),
+        url: Set(payload.url),
+        content_type: Set(payload.content_type),
+    };
+
+    let channel = new_channel.insert(&sea_db).await.map_err(AppError::SeaORM)?;
+
+    // Fetch the created channel with group info
+    let channel_with_group = channels::Entity::find()
+        .filter(channels::Column::Id.eq(&channel.id))
+        .join(JoinType::LeftJoin, channels::Relation::Groups.def())
+        .select_only()
+        .column_as(channels::Column::Id, "id")
+        .column_as(channels::Column::UserId, "user_id")
+        .column_as(channels::Column::GroupId, "group_id")
+        .column_as(channels::Column::Name, "name")
+        .column_as(channels::Column::ChannelId, "channel_id")
+        .column_as(channels::Column::Thumbnail, "thumbnail")
+        .column_as(channels::Column::CreatedAt, "created_at")
+        .column_as(channels::Column::UpdatedAt, "updated_at")
+        .column_as(channels::Column::ContentType, "content_type")
+        .column_as(channels::Column::Url, "url")
+        .column_as(groups::Column::Name, "group_name")
+        .column_as(groups::Column::Icon, "group_icon")
+        .into_model::<ChannelWithGroup>()
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+        .ok_or_else(|| AppError::NotFound("Channel not found after creation".to_string()))?;
+
+    tracing::info!(
+        "Channel {} created in group {} for user {}",
+        channel.id,
+        target_group_id,
+        user_id
+    );
+
+    Ok(Json(ApiResponse::success(channel_with_group)))
 }

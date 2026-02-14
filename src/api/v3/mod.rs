@@ -24,6 +24,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/health", get(|| async { "v3 health check ok!" }))
         .route("/api/v3/animes", get(animes::all_animes_v3))
         .route("/api/v3/groups", get(groups::all_groups_v3))
+        .route("/api/v3/groups/{group_id}/channels", post(groups::create_channel_in_group))
         .route("/api/v3/channels/{channel_id}/batch", patch(channels::patch_channels_batch))
         .route("/api/v3/share-links", get(share_links::list_share_links))
         .route("/api/v3/share-links", post(share_links::create_share_link))
