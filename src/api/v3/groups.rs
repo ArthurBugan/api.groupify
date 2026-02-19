@@ -395,14 +395,14 @@ impl From<videos::Model> for VideoResponse {
     }
 }
 
-/// Get latest videos from channels in a group
+/// Get latest videos from channels in a group with pagination
 #[tracing::instrument(name = "Get group videos", skip(cookies, inner))]
 pub async fn get_group_videos(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
     Query(params): Query<PaginationParams>,
-) -> Result<Json<ApiResponse<Vec<VideoResponse>>>, AppError> {
+) -> Result<Json<PaginatedResponse<VideoResponse>>, AppError> {
     let InnerState { sea_db, .. } = inner;
 
     // Authenticate user
@@ -442,9 +442,23 @@ pub async fn get_group_videos(
         )));
     }
 
-    // Set pagination defaults
+    // Set pagination parameters
+    let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(20).max(1).min(50);
-    let offset = (params.page.unwrap_or(1).saturating_sub(1)) * limit;
+    let offset = (page - 1) * limit;
+
+    // Count total videos for pagination
+    let total_count = videos::Entity::find()
+        .filter(videos::Column::GroupId.eq(&group_id))
+        .filter(videos::Column::UserId.eq(&user_id))
+        .count(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    let total_result: i64 = total_count.try_into().unwrap_or(0);
+    let total_pages = ((total_result as f64) / (limit as f64)).ceil() as u32;
+    let has_next = page < total_pages;
+    let has_prev = page > 1;
 
     // Fetch videos from all channels in the group
     let videos = videos::Entity::find()
@@ -460,13 +474,27 @@ pub async fn get_group_videos(
     let video_responses: Vec<VideoResponse> = videos.into_iter().map(|v| v.into()).collect();
 
     tracing::info!(
-        "Retrieved {} videos for group {} (user {})",
+        "Retrieved {} videos for group {} (user {}) - page {} of {}",
         video_responses.len(),
         group_id,
-        user_id
+        user_id,
+        page,
+        total_pages
     );
 
-    Ok(Json(ApiResponse::success(video_responses)))
+    let response = PaginatedResponse {
+        data: video_responses,
+        pagination: PaginationInfo {
+            page,
+            limit,
+            total: total_result,
+            total_pages,
+            has_next,
+            has_prev,
+        },
+    };
+
+    Ok(Json(response))
 }
 
 /// Sync videos from YouTube for all channels in a group
