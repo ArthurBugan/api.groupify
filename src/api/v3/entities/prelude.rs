@@ -13,4 +13,5 @@ pub use super::subscription_plans::Entity as SubscriptionPlans;
 pub use super::subscription_plans_users::Entity as SubscriptionPlansUsers;
 pub use super::survey::Entity as Survey;
 pub use super::users::Entity as Users;
+pub use super::videos::Entity as Videos;
 pub use super::youtube_channels::Entity as YoutubeChannels;

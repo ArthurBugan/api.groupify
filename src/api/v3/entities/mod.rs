@@ -15,4 +15,5 @@ pub mod subscription_plans;
 pub mod subscription_plans_users;
 pub mod survey;
 pub mod users;
+pub mod videos;
 pub mod youtube_channels;
