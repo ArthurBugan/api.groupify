@@ -210,8 +210,16 @@ impl VideoSyncService {
                     })?;
 
                 if existing.is_some() {
-                    // Video already exists, update view count and other metrics
+                    // Skip if video was updated in the last 24 hours
                     if let Some(existing_video) = existing {
+                        if let Some(updated_at) = existing_video.updated_at {
+                            let hours_since_update = (Utc::now().naive_utc() - updated_at).num_hours();
+                            if hours_since_update < 24 {
+                                continue;
+                            }
+                        }
+                        
+                        // Video already exists, update view count and other metrics
                         let mut active: videos::ActiveModel = existing_video.into();
                         active.views_count = Set(views_count);
                         active.updated_at = Set(Some(Utc::now().naive_utc()));
