@@ -1,21 +1,22 @@
 // src/api/common/body_logger.rs
 use axum::{
-    body::{Body, Bytes, HttpBody},
+    body::Body,
     extract::Request,
     middleware::Next,
     response::Response,
 };
-use http_body_util::{BodyExt, Full};
+use http_body_util::BodyExt;
 use tracing::{debug, error, info, warn};
 use axum::http::StatusCode;
+use super::tracing::{enrich_with_request_body, enrich_with_response_body};
 
 pub async fn log_request_response_body(
     request: Request,
     next: Next,
 ) -> Response {
+    let method = request.method().clone();
     let (parts, body) = request.into_parts();
 
-    // --- Log Request Body ---
     let request_body_bytes = match body.collect().await {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
@@ -29,6 +30,7 @@ pub async fn log_request_response_body(
 
     if !request_body_bytes.is_empty() {
         if let Ok(body_str) = std::str::from_utf8(&request_body_bytes) {
+            enrich_with_request_body(body_str);
             info!("Request Body: {}", body_str);
         } else {
             warn!("Request Body is not valid UTF-8, logging as bytes: {:?}", request_body_bytes);
@@ -37,13 +39,10 @@ pub async fn log_request_response_body(
         debug!("Request Body is empty.");
     }
 
-    // Re-create the request with the body for the next middleware/handler
     let request = Request::from_parts(parts, Body::from(request_body_bytes));
 
-    // Process the request
     let response = next.run(request).await;
 
-    // --- Log Response Body ---
     let (parts, body) = response.into_parts();
 
     let response_body_bytes = match body.collect().await {
@@ -59,7 +58,10 @@ pub async fn log_request_response_body(
 
     if !response_body_bytes.is_empty() {
         if let Ok(body_str) = std::str::from_utf8(&response_body_bytes) {
-            info!("Response Body: {}", body_str);
+            enrich_with_response_body(body_str);
+            if method == "POST" || method == "PUT" || method == "PATCH" {
+                info!("Response Body: {}", body_str);
+            }
         } else {
             warn!("Response Body is not valid UTF-8, logging as bytes: {:?}", response_body_bytes);
         }
@@ -67,6 +69,5 @@ pub async fn log_request_response_body(
         debug!("Response Body is empty.");
     }
 
-    // Re-create the response with the body for the client
     Response::from_parts(parts, Body::from(response_body_bytes))
 }
