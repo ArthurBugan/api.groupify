@@ -1,22 +1,21 @@
 //! YouTube Video Sync Service
 //! 
 //! This module handles syncing videos from YouTube API to the local database.
-//! It uses the user's Google OAuth session to make authenticated API calls.
+//! Quota-efficient: uses playlistItems.list (1 unit) + videos.list (1 unit) per channel
+//! instead of search.list (100 units).
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Utc};
 use reqwest::Client;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::{error, info, warn};
-use uuid::Uuid;
 
 use crate::api::v3::entities::videos;
 use crate::errors::AppError;
 
-/// YouTube API response for search/list videos
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct YoutubeVideoListResponse {
     pub kind: String,
@@ -27,14 +26,14 @@ pub struct YoutubeVideoListResponse {
     pub items: Vec<YoutubeVideoItem>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageInfo {
     pub total_results: i32,
     pub results_per_page: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct YoutubeVideoItem {
     pub kind: String,
@@ -45,7 +44,7 @@ pub struct YoutubeVideoItem {
     pub statistics: Option<Statistics>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VideoSnippet {
     pub published_at: String,
@@ -54,11 +53,9 @@ pub struct VideoSnippet {
     pub description: String,
     pub thumbnails: Thumbnails,
     pub channel_title: String,
-    pub tags: Option<Vec<String>>,
-    pub category_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thumbnails {
     pub default: Thumbnail,
@@ -68,43 +65,46 @@ pub struct Thumbnails {
     pub maxres: Option<Thumbnail>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thumbnail {
     pub url: String,
+    #[allow(dead_code)]
     pub width: Option<i32>,
+    #[allow(dead_code)]
     pub height: Option<i32>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContentDetails {
     pub duration: String,
-    pub dimension: String,
-    pub definition: String,
-    pub caption: String,
-    pub licensed_content: bool,
-    pub content_rating: ContentRating,
-    pub projection: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContentRating {
-    #[serde(flatten)]
-    pub extra: std::collections::HashMap<String, serde_json::Value>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Statistics {
     pub view_count: Option<String>,
-    pub like_count: Option<String>,
-    pub favorite_count: Option<String>,
-    pub comment_count: Option<String>,
 }
 
-/// Service for syncing YouTube videos
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistItemsResponse {
+    items: Vec<PlaylistItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistItem {
+    content_details: PlaylistItemContentDetails,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlaylistItemContentDetails {
+    video_id: String,
+}
+
 pub struct VideoSyncService {
     db: DatabaseConnection,
     http_client: Client,
@@ -139,7 +139,6 @@ impl VideoSyncService {
                 }
                 Err(e) => {
                     error!("Failed to sync videos for channel {}: {:?}", channel_id, e);
-                    // Continue with other channels even if one fails
                 }
             }
         }
@@ -152,8 +151,6 @@ impl VideoSyncService {
         Ok(total_synced)
     }
 
-    /// Fetch and store videos for a single channel
-    #[tracing::instrument(name = "Sync channel videos", skip(self, google_token))]
     async fn sync_channel_videos(
         &self,
         user_id: &str,
@@ -161,32 +158,48 @@ impl VideoSyncService {
         channel_id: &str,
         google_token: &str,
     ) -> Result<usize, AppError> {
-        // Fetch recent videos from YouTube API
-        let videos_response = self
-            .fetch_youtube_videos(channel_id, google_token, Some(10))
-            .await?;
-
+        let max_results = 10;
+        
+        // Step 1: Get existing video IDs from DB for this channel (no API call)
+        let existing_videos = self.get_existing_video_ids(channel_id).await?;
+        
+        // Step 2: Get video IDs from uploads playlist (1 quota unit)
+        let playlist_video_ids = self.fetch_uploads_playlist(channel_id, google_token, max_results).await?;
+        
+        if playlist_video_ids.is_empty() {
+            info!("No videos found in uploads playlist for channel: {}", channel_id);
+            return Ok(0);
+        }
+        
+        // Step 3: Filter out videos we already have and were updated < 24h ago
+        let video_ids_to_fetch: Vec<String> = playlist_video_ids
+            .into_iter()
+            .filter(|vid| !existing_videos.contains(vid))
+            .collect();
+        
+        if video_ids_to_fetch.is_empty() {
+            info!("All videos already synced for channel: {}", channel_id);
+            return Ok(0);
+        }
+        
+        info!("Fetching {} new videos for channel {}", video_ids_to_fetch.len(), channel_id);
+        
+        // Step 4: Fetch video details (1 quota unit for up to 50 videos)
+        let videos_response = self.fetch_video_details(&video_ids_to_fetch, google_token).await?;
+        
         let mut synced_count = 0;
 
         for item in videos_response.items {
             if let Some(snippet) = item.snippet {
-                // Parse duration from ISO 8601 format (e.g., "PT10M30S")
                 let duration_seconds = item
                     .content_details
                     .as_ref()
                     .and_then(|cd| parse_duration(&cd.duration).ok());
 
-                // Parse view count
                 let views_count = item.statistics.as_ref().and_then(|s| {
-                    s.view_count
-                        .as_ref()
-                        .and_then(|v| v.parse::<i32>().ok())
+                    s.view_count.as_ref().and_then(|v| v.parse::<i32>().ok())
                 });
 
-                let published_at = snippet.published_at;
-                let video_url = format!("https://www.youtube.com/watch?v={}", item.id);
-
-                // Get best available thumbnail
                 let thumbnail = snippet
                     .thumbnails
                     .maxres
@@ -195,111 +208,92 @@ impl VideoSyncService {
                     .or(Some(&snippet.thumbnails.high))
                     .map(|t| t.url.clone());
 
-                // Create video ID (user_id + channel_id + video_id)
                 let video_db_id = format!("{}_{}_{}", user_id, channel_id, item.id);
+                let video_url = format!("https://www.youtube.com/watch?v={}", item.id);
 
-                // Check if video already exists
-                let existing = videos::Entity::find()
-                    .filter(videos::Column::ExternalId.eq(&item.id))
-                    .filter(videos::Column::ChannelId.eq(channel_id))
-                    .one(&self.db)
-                    .await
-                    .map_err(|e| {
-                        error!("Database error checking existing video: {:?}", e);
-                        AppError::SeaORM(e)
-                    })?;
+                let video_active = videos::ActiveModel {
+                    id: Set(video_db_id),
+                    channel_id: Set(channel_id.to_string()),
+                    group_id: Set(group_id.to_string()),
+                    user_id: Set(user_id.to_string()),
+                    title: Set(snippet.title),
+                    description: Set(Some(snippet.description)),
+                    thumbnail: Set(thumbnail),
+                    url: Set(Some(video_url)),
+                    published_at: Set(Some(DateTime::parse_from_rfc3339(&snippet.published_at)
+                        .map_err(|e| {
+                            error!("Failed to parse published_at: {:?}", e);
+                            AppError::BadRequest("Invalid published_at format".to_string())
+                        })?
+                        .with_timezone(&Utc)
+                        .naive_utc())),
+                    content_type: Set("youtube".to_string()),
+                    external_id: Set(Some(item.id.clone())),
+                    duration_seconds: Set(duration_seconds),
+                    views_count: Set(views_count),
+                    created_at: Set(Some(Utc::now().naive_utc())),
+                    updated_at: Set(Some(Utc::now().naive_utc())),
+                };
 
-                if existing.is_some() {
-                    // Skip if video was updated in the last 24 hours
-                    if let Some(existing_video) = existing {
-                        if let Some(updated_at) = existing_video.updated_at {
-                            let hours_since_update = (Utc::now().naive_utc() - updated_at).num_hours();
-                            if hours_since_update < 24 {
-                                continue;
-                            }
-                        }
-                        
-                        // Video already exists, update view count and other metrics
-                        let mut active: videos::ActiveModel = existing_video.into();
-                        active.views_count = Set(views_count);
-                        active.updated_at = Set(Some(Utc::now().naive_utc()));
-                        
-                        active.update(&self.db).await.map_err(|e| {
-                            error!("Failed to update video: {:?}", e);
-                            AppError::SeaORM(e)
-                        })?;
-                    }
-                } else {
-                    // Insert new video
-                    let video_active = videos::ActiveModel {
-                        id: Set(video_db_id),
-                        channel_id: Set(channel_id.to_string()),
-                        group_id: Set(group_id.to_string()),
-                        user_id: Set(user_id.to_string()),
-                        title: Set(snippet.title),
-                        description: Set(Some(snippet.description)),
-                        thumbnail: Set(thumbnail),
-                        url: Set(Some(video_url)),
-                        published_at: Set(Some(DateTime::parse_from_rfc3339(&published_at)
-                            .map_err(|e| {
-                                error!("Failed to parse published_at: {:?}", e);
-                                AppError::BadRequest("Invalid published_at format".to_string())
-                            })?
-                            .with_timezone(&Utc)
-                            .naive_utc())),
-                        content_type: Set("youtube".to_string()),
-                        external_id: Set(Some(item.id.clone())),
-                        duration_seconds: Set(duration_seconds),
-                        views_count: Set(views_count),
-                        created_at: Set(Some(Utc::now().naive_utc())),
-                        updated_at: Set(Some(Utc::now().naive_utc())),
-                    };
+                video_active.insert(&self.db).await.map_err(|e| {
+                    error!("Failed to insert video: {:?}", e);
+                    AppError::SeaORM(e)
+                })?;
 
-                    video_active.insert(&self.db).await.map_err(|e| {
-                        error!("Failed to insert video: {:?}", e);
-                        AppError::SeaORM(e)
-                    })?;
-
-                    synced_count += 1;
-                }
+                synced_count += 1;
             }
         }
 
         Ok(synced_count)
     }
 
-    /// Fetch videos from YouTube API for a channel
-    #[tracing::instrument(name = "Fetch YouTube videos", skip(self, token))]
-    async fn fetch_youtube_videos(
+    /// Get existing video IDs from database (no API quota)
+    async fn get_existing_video_ids(&self, channel_id: &str) -> Result<Vec<String>, AppError> {
+        let videos = videos::Entity::find()
+            .filter(videos::Column::ChannelId.eq(channel_id))
+            .all(&self.db)
+            .await
+            .map_err(|e| {
+                error!("Database error fetching existing videos: {:?}", e);
+                AppError::SeaORM(e)
+            })?;
+        
+        Ok(videos.into_iter().filter_map(|v| v.external_id).collect())
+    }
+
+    /// Fetch video IDs from channel's uploads playlist (1 quota unit)
+    async fn fetch_uploads_playlist(
         &self,
         channel_id: &str,
         token: &str,
-        max_results: Option<i32>,
-    ) -> Result<YoutubeVideoListResponse, AppError> {
-        let max_results = max_results.unwrap_or(10).min(50);
-        
-        // First, get video IDs from search API
-        let search_url = format!(
-            "https://www.googleapis.com/youtube/v3/search?channelId={}&part=snippet&order=date&maxResults={}&type=video",
-            channel_id,
-            max_results
+        max_results: i32,
+    ) -> Result<Vec<String>, AppError> {
+        // Channel uploads playlist ID is "UU" + channel_id (without "UC" prefix)
+        let uploads_playlist_id = if channel_id.starts_with("UC") {
+            format!("UU{}", &channel_id[2..])
+        } else {
+            format!("UU{}", channel_id)
+        };
+
+        let url = format!(
+            "https://www.googleapis.com/youtube/v3/playlistItems?playlistId={}&part=contentDetails&maxResults={}",
+            uploads_playlist_id,
+            max_results.min(50)
         );
 
-        info!("Fetching video list from YouTube API for channel: {}", channel_id);
-
-        let search_response = self
+        let response = self
             .http_client
-            .get(&search_url)
+            .get(&url)
             .bearer_auth(token)
             .send()
             .await
             .map_err(|e| {
-                error!("HTTP error fetching video list: {:?}", e);
+                error!("HTTP error fetching playlist: {:?}", e);
                 AppError::ExternalService(anyhow::Error::new(e))
             })?;
 
-        if !search_response.status().is_success() {
-            let error_text = search_response.text().await.unwrap_or_default();
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
             error!("YouTube API error: {}", error_text);
             return Err(AppError::ExternalService(anyhow::anyhow!(
                 "YouTube API error: {}",
@@ -307,62 +301,29 @@ impl VideoSyncService {
             )));
         }
 
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct SearchItem {
-            id: SearchId,
-        }
-
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct SearchId {
-            video_id: String,
-        }
-
-        #[derive(Debug, Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct SearchResponse {
-            items: Vec<SearchItem>,
-        }
-
-        let search_data: SearchResponse = search_response.json().await.map_err(|e| {
-            error!("Failed to parse search response: {:?}", e);
+        let data: PlaylistItemsResponse = response.json().await.map_err(|e| {
+            error!("Failed to parse playlist response: {:?}", e);
             AppError::ExternalService(anyhow::Error::new(e))
         })?;
 
-        let video_ids: Vec<String> = search_data
-            .items
-            .into_iter()
-            .map(|item| item.id.video_id)
-            .collect();
+        Ok(data.items.into_iter().map(|i| i.content_details.video_id).collect())
+    }
 
-        if video_ids.is_empty() {
-            return Ok(YoutubeVideoListResponse {
-                kind: "youtube#videoListResponse".to_string(),
-                etag: "".to_string(),
-                next_page_token: None,
-                prev_page_token: None,
-                page_info: PageInfo {
-                    total_results: 0,
-                    results_per_page: 0,
-                },
-                items: vec![],
-            });
-        }
-
-        // Now fetch detailed video information
+    /// Fetch video details by IDs (1 quota unit for up to 50 videos)
+    async fn fetch_video_details(
+        &self,
+        video_ids: &[String],
+        token: &str,
+    ) -> Result<YoutubeVideoListResponse, AppError> {
         let ids_param = video_ids.join(",");
-        let videos_url = format!(
-            "https://www.googleapis.com/youtube/v3/videos?id={}&part=snippet,contentDetails,statistics&maxResults={}",
-            ids_param,
-            max_results
+        let url = format!(
+            "https://www.googleapis.com/youtube/v3/videos?id={}&part=snippet,contentDetails,statistics",
+            ids_param
         );
 
-        info!("Fetching video details for {} videos", video_ids.len());
-
-        let videos_response = self
+        let response = self
             .http_client
-            .get(&videos_url)
+            .get(&url)
             .bearer_auth(token)
             .send()
             .await
@@ -371,8 +332,8 @@ impl VideoSyncService {
                 AppError::ExternalService(anyhow::Error::new(e))
             })?;
 
-        if !videos_response.status().is_success() {
-            let error_text = videos_response.text().await.unwrap_or_default();
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
             error!("YouTube API error: {}", error_text);
             return Err(AppError::ExternalService(anyhow::anyhow!(
                 "YouTube API error: {}",
@@ -380,18 +341,14 @@ impl VideoSyncService {
             )));
         }
 
-        let videos_data: YoutubeVideoListResponse = videos_response.json().await.map_err(|e| {
+        response.json().await.map_err(|e| {
             error!("Failed to parse videos response: {:?}", e);
             AppError::ExternalService(anyhow::Error::new(e))
-        })?;
-
-        Ok(videos_data)
+        })
     }
 }
 
-/// Parse ISO 8601 duration format (e.g., "PT10M30S") to seconds
 fn parse_duration(duration_str: &str) -> Result<i32, Box<dyn std::error::Error>> {
-    // Remove PT prefix
     let duration_str = duration_str.trim_start_matches("PT");
     
     let mut total_seconds = 0i32;
