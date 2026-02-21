@@ -11,36 +11,52 @@ use tracing::{info_span, Level, Span};
 
 /// Extract user ID from auth-token cookie
 fn extract_user_id<B>(request: &Request<B>) -> Option<String> {
-    let auth_token = request
+    let cookie_header = request
         .headers()
-        .get_all(axum::http::header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|cookie_str| cookie_str.split(';'))
+        .get(axum::http::header::COOKIE)?
+        .to_str()
+        .ok()?;
+
+    let auth_token = cookie_header
+        .split(';')
+        .map(|c| c.trim())
         .find_map(|cookie| {
-            let cookie = cookie.trim();
-            if cookie.starts_with("auth-token=") {
-                Some(cookie.trim_start_matches("auth-token=").to_string())
+            let parts: Vec<&str> = cookie.splitn(2, '=').collect();
+            if parts.len() == 2 && parts[0] == "auth-token" {
+                Some(parts[1].trim().to_string())
             } else {
                 None
             }
         })?;
 
-    let secret = std::env::var("PAS_TKN").ok()?;
+    if auth_token.is_empty() {
+        return None;
+    }
+
+    let secret = match std::env::var("PAS_TKN") {
+        Ok(s) => s,
+        Err(_) => {
+            tracing::debug!("PAS_TKN env var not set");
+            return None;
+        }
+    };
 
     #[derive(serde::Deserialize)]
     struct Claims {
         user_id: String,
     }
 
-    let token_data = jsonwebtoken::decode::<Claims>(
+    match jsonwebtoken::decode::<Claims>(
         &auth_token,
         &jsonwebtoken::DecodingKey::from_secret(secret.as_ref()),
         &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256),
-    )
-    .ok()?;
-
-    Some(token_data.claims.user_id)
+    ) {
+        Ok(token_data) => Some(token_data.claims.user_id),
+        Err(e) => {
+            tracing::debug!("Failed to decode JWT token: {}", e);
+            None
+        }
+    }
 }
 
 /// Creates a custom tracing span for HTTP requests with detailed context
