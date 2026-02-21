@@ -351,8 +351,10 @@ pub async fn all_channels(
         },
     };
 
-    if let Err(e) = inner.redis_cache.set_json(&cache_key, &response, 300).await {
-        tracing::warn!("all_channels: redis SETEX error: {:?}", e);
+    if !response.data.is_empty() {
+        if let Err(e) = inner.redis_cache.set_json(&cache_key, &response, 300).await {
+            tracing::warn!("all_channels: redis SETEX error: {:?}", e);
+        }
     }
 
     let duration = start_time.elapsed();
@@ -787,8 +789,10 @@ pub async fn all_channels_by_group_id(
         }
     };
 
-    if let Err(e) = inner.redis_cache.set_json(&cache_key, &channels, 300).await {
-        tracing::warn!("all_channels_by_group_id: redis SETEX error: {:?}", e);
+    if !channels.is_empty() {
+        if let Err(e) = inner.redis_cache.set_json(&cache_key, &channels, 300).await {
+            tracing::warn!("all_channels_by_group_id: redis SETEX error: {:?}", e);
+        }
     }
     Ok(channels)
 }
