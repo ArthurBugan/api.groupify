@@ -1,8 +1,8 @@
 use anyhow::Result;
 use axum::extract::State;
 use axum::Json;
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::distr::Alphanumeric;
+use rand::*;
 use serde_json::{json, Value};
 use sqlx::{Executor, Postgres, Transaction};
 use tower_cookies::Cookies;
@@ -60,7 +60,7 @@ pub async fn subscribe(
 #[tracing::instrument(name = "Generate subscription token")]
 pub fn generate_subscription_token() -> String {
     tracing::debug!("Generating new subscription token");
-    let mut rng = thread_rng();
+    let mut rng = rand::rng();
     let token = std::iter::repeat_with(|| rng.sample(Alphanumeric))
         .map(char::from)
         .take(56)

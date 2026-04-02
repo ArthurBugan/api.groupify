@@ -15,6 +15,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::{Executor, PgPool, Postgres, Transaction};
+use argon2::password_hash::rand_core::OsRng;
 
 #[derive(Deserialize)]
 pub struct Credentials {
@@ -297,7 +298,7 @@ pub async fn compute_password_hash(password: String) -> Result<String, AppError>
     tracing::debug!("Password length: {}", password.len());
 
     tracing::debug!("Generating random salt");
-    let salt = SaltString::generate(&mut rand::thread_rng());
+    let salt = SaltString::generate(OsRng);
     tracing::debug!("Salt generated successfully");
 
     tracing::debug!("Creating Argon2 parameters (memory: 15000, iterations: 2, parallelism: 1)");

@@ -95,7 +95,7 @@ pub async fn get_blog_posts(
     // Add sorting by date_created descending
     query_params.insert("sort", "-date_created".to_string());
 
-    let response = client
+    let response: reqwest::Response = client
         .get("https://coolify.groupify.dev/directus/items/posts")
         .query(&query_params)
         .send()
