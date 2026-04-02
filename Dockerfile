@@ -18,7 +18,7 @@ WORKDIR /usr/src/myapp
 # Copy the built binary from the previous stage
 COPY --from=builder /usr/src/myapp/target/release/api-groupify /usr/src/myapp/api-groupify
 
-RUN apt-get update && apt install -y openssl
+RUN apt-get update && apt install -y openssl curl
 
 # Expose the port your application listens on
 EXPOSE 3001
