@@ -1,4 +1,4 @@
-use crate::api::common::{PaginatedResponse, PaginationInfo, PaginationParams};
+use crate::api::common::{PaginatedResponse, PaginationParams};
 use crate::errors::AppError;
 use anyhow::Result;
 use axum::extract::{Path, Query, State};
@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::api::common::limits::enforce_group_creation_limit;
 
 use crate::api::v1::user::{get_email_from_token, get_user_id_from_token};
-use crate::api::v2::channels::{all_channels_by_group_id, all_count_by_channel_id, ChannelWithGroup};
+use crate::api::v2::channels::{all_channels_by_group_id, ChannelWithGroup};
 use crate::InnerState;
 
 #[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
@@ -753,6 +753,51 @@ pub async fn delete_group(
                 tx.rollback().await?;
                 return Err(AppError::Database(anyhow::anyhow!(
                     "Database query timeout after {:?} for deleting channels",
+                    delete_timeout
+                )));
+            }
+        }
+    }
+
+    // Delete share links for all groups (to avoid foreign key constraints)
+    if !all_group_ids_to_delete.is_empty() {
+        let share_links_ids_placeholder = (2..=all_group_ids_to_delete.len() + 1)
+            .map(|i| format!("${}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let delete_share_links_query = format!(
+            r#"DELETE FROM share_links WHERE group_id IN ({})"#,
+            share_links_ids_placeholder
+        );
+
+        let mut delete_share_links = sqlx::query(&delete_share_links_query);
+
+        // Bind all group IDs
+        for group_id in &all_group_ids_to_delete {
+            delete_share_links = delete_share_links.bind(group_id);
+        }
+
+        tracing::debug!("Deleting share links for groups: {:?}", all_group_ids_to_delete);
+
+        match tokio::time::timeout(delete_timeout, delete_share_links.execute(&mut *tx)).await {
+            Ok(Ok(result)) => {
+                tracing::info!(
+                    "Successfully deleted {} share links for groups: {:?}",
+                    result.rows_affected(),
+                    all_group_ids_to_delete
+                );
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Database error while deleting share links: {:?}", e);
+                tx.rollback().await?;
+                return Err(AppError::from(e));
+            }
+            Err(elapsed) => {
+                tracing::error!("Timeout while deleting share links: {:?}", elapsed);
+                tx.rollback().await?;
+                return Err(AppError::Database(anyhow::anyhow!(
+                    "Database query timeout after {:?} for deleting share links",
                     delete_timeout
                 )));
             }
