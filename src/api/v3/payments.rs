@@ -63,8 +63,8 @@ pub async fn create_checkout_session(
     
     // Determine product ID based on plan name
     let product_id = match payload.plan_name.as_str() {
-        "Basic" => "pdt_0NbYgsWIfXnEi1M6g6q0P",
-        "Pro" => "pdt_0NbYgvc8nuqUMN6xjCFhA",
+        "Basic" => "pdt_0NbiyF78XxSPn9p43kVNX",
+        "Pro" => "pdt_0NbiyEerr9uUphnRBJ3ph",
         _ => {
             error!("Unknown plan name: {}", payload.plan_name);
             return Err(AppError::BadRequest(format!("Unknown plan: {}", payload.plan_name)));
