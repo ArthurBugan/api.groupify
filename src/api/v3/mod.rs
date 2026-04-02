@@ -6,6 +6,7 @@ pub mod sales;
 pub mod services;
 pub mod share_links;
 pub mod users;
+pub mod payments;
 pub mod blog;
 
 use axum::{middleware, Router};
@@ -34,6 +35,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/share-links/{share_link_id}", patch(share_links::update_share_link))
         .route("/api/v3/share-links/{share_link_id}", delete(share_links::delete_share_link))
         .route("/api/v3/me", get(users::me))
+        .route("/api/v3/payments", post(payments::create_checkout_session))
         .layer(CookieManagerLayer::new())
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state)
