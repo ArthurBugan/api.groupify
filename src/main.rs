@@ -40,8 +40,7 @@ use tracing::Level;
 use axum_otel::{AxumOtelOnFailure, AxumOtelOnResponse, AxumOtelSpanCreator};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing_otel_extra::{
-    get_resource, init_env_filter, init_meter_provider, init_tracer_provider,
-    init_tracing_subscriber,
+    get_resource, init_env_filter, init_logger_provider, init_meter_provider, init_tracer_provider, init_tracing_subscriber
 };
 
 use opentelemetry::KeyValue;
@@ -88,13 +87,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let tracer_provider = init_tracer_provider(&resource, 1.0)?;
     let meter_provider = init_meter_provider(&resource, 30)?;
     let env_filter = init_env_filter(&Level::DEBUG);
+    let logger_provider = init_logger_provider(&resource)?;
 
     let _guard = init_tracing_subscriber(
         service_name,
         env_filter,
-    vec![Box::new(tracing_subscriber::fmt::layer())],
+        vec![Box::new(tracing_subscriber::fmt::layer())],
         tracer_provider,
         meter_provider,
+        Some(logger_provider),
     )?;
 
     tracing::info!("Starting Groupify API server");

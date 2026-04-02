@@ -9,7 +9,7 @@ use axum::Json;
 use base64::engine::general_purpose;
 use base64::Engine;
 use rand::Rng;
-// serde_json::json might not be needed if AppError handles all JSON error responses
+
 use sqlx::{FromRow};
 use url::Url;
 
@@ -38,7 +38,7 @@ pub struct CounterLinkStatistics {
 }
 
 fn generate_id() -> String {
-    let random_number = rand::thread_rng().gen_range(0..u32::MAX);
+    let random_number = rand::random::<u32>();
     general_purpose::URL_SAFE_NO_PAD.encode(random_number.to_string())
 }
 
