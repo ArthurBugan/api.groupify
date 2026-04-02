@@ -11,6 +11,7 @@ use axum::{
 
 use crate::api::{v1::auth::{google_callback, google_login}, v3::sales::make_ml_sale};
 use crate::api::v1::discord_auth::{discord_callback, discord_login};
+use crate::api::v3::payments::handle_dodo_subscription_webhook;
 
 use crate::api::v1::login::{login_user, logout_user};
 use crate::api::v1::subscription_confirm::confirm;
@@ -53,6 +54,9 @@ pub fn create_system_router(state: InnerState) -> Router<InnerState> {
 
         .route("/api/v3/blog", get(get_blog_posts))
         .route("/api/v3/blog/{slug}", get(get_blog_post_by_slug))
+        
+        // Dodo webhook routes
+        .route("/api/v3/callbacks/dodo", post(handle_dodo_subscription_webhook))
 
         .with_state(state)
 }
