@@ -12,9 +12,10 @@ chrono = { version = "0.4.44", features = ["serde"] }
 metrics = "0.24.3"
 once_cell = "1.21.4"
 rand = { version = "0.10.0", features = ["thread_rng"] }
-reqwest = { version = "0.12.25", default-features = false, features = [
+reqwest = { version = "0.13.2", default-features = false, features = [
   "json",
-  "rustls-tls",
+  "query",
+  "native-tls-vendored",
 ] }
 secrecy = "0.10.3"
 serde = { version = "1.0.197", features = ["derive"] }
