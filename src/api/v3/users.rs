@@ -2,9 +2,7 @@ use anyhow::Result;
 use axum::{extract::State, Json};
 use chrono::{DateTime, FixedOffset, NaiveDateTime, Utc};
 use rust_decimal::Decimal;
-use sea_orm::{
-    ColumnTrait, EntityTrait, FromQueryResult, QueryFilter,
-};
+use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter};
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
 
@@ -12,7 +10,9 @@ use crate::{
     api::{
         common::ApiResponse,
         v1::user::get_user_id_from_token,
-        v3::entities::{subscription_plans, subscription_plans_users, users},
+        v3::entities::{
+            groups, subscription_plans, subscription_plans_users, users, youtube_channels,
+        },
     },
     errors::AppError,
     InnerState,
@@ -34,6 +34,10 @@ pub struct User {
     pub price_yearly: Decimal,
     pub subscription_start_date: DateTime<FixedOffset>,
     pub subscription_end_date: DateTime<FixedOffset>,
+    pub group_count: i32,
+    pub channel_count: i32,
+    pub can_add_channel: bool,
+    pub can_add_group: bool,
 }
 
 #[tracing::instrument(name = "Get current user data", skip(cookies, inner))]
@@ -69,6 +73,21 @@ pub async fn me(
         }
     };
 
+    // 3. Count groups for user
+    let group_count =
+        sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM groups WHERE user_id = $1")
+            .bind(&user_id)
+            .fetch_one(&inner.db)
+            .await
+            .unwrap_or(0);
+
+    let channels_count =
+        sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM channels WHERE user_id = $1")
+            .bind(&user_id)
+            .fetch_one(&inner.db)
+            .await
+            .unwrap_or(0);
+
     let subscription_plans_users = subscription_plans_users::Entity::find()
         .filter(subscription_plans_users::Column::UserId.eq(user_id))
         .find_also_related(subscription_plans::Entity)
@@ -76,13 +95,11 @@ pub async fn me(
         .await
         .map_err(AppError::SeaORM)?;
 
-    let current = subscription_plans_users
-        .into_iter()
-        .find(|(sub_user, _)| {
-            sub_user
-                .ended_at
-                .map_or(true, |end_date| end_date > Utc::now().fixed_offset())
-        });
+    let current = subscription_plans_users.into_iter().find(|(sub_user, _)| {
+        sub_user
+            .ended_at
+            .map_or(true, |end_date| end_date > Utc::now().fixed_offset())
+    });
 
     if let Some((active_subscription, Some(plan))) = current {
         println!(
@@ -106,6 +123,12 @@ pub async fn me(
 
             subscription_start_date: active_subscription.started_at.unwrap_or_default(),
             subscription_end_date: active_subscription.ended_at.unwrap_or_default(),
+
+            group_count,
+            channel_count: channels_count,
+
+            can_add_channel: channels_count < plan.max_channels,
+            can_add_group: group_count < plan.max_groups,
         })));
     }
 
