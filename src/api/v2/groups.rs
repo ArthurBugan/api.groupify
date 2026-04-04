@@ -733,8 +733,6 @@ pub async fn delete_group(
             delete_channels = delete_channels.bind(id_to_delete);
         }
 
-        tracing::debug!("Deleting channels for user {} in groups {:?}", user_id, all_group_ids_to_delete);
-
         match tokio::time::timeout(delete_timeout, delete_channels.execute(&mut *tx)).await {
             Ok(Ok(result)) => {
                 tracing::info!(
@@ -761,7 +759,7 @@ pub async fn delete_group(
 
     // Delete share links for all groups (to avoid foreign key constraints)
     if !all_group_ids_to_delete.is_empty() {
-        let share_links_ids_placeholder = (2..=all_group_ids_to_delete.len() + 1)
+        let share_links_ids_placeholder = (1..=all_group_ids_to_delete.len())
             .map(|i| format!("${}", i))
             .collect::<Vec<_>>()
             .join(",");
