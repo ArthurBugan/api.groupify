@@ -15,6 +15,10 @@ pub struct Model {
     pub ended_at: Option<DateTimeWithTimeZone>,
     pub created_at: Option<DateTimeWithTimeZone>,
     pub updated_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub external_subscription_id: Option<String>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub external_customer_id: Option<String>,
     #[sea_orm(
         belongs_to,
         from = "subscription_plan_id",
