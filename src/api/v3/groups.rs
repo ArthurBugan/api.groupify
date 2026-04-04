@@ -395,13 +395,26 @@ impl From<videos::Model> for VideoResponse {
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ChannelFilterParams {
+    pub channel_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoQueryParams {
+    pub page: Option<u32>,
+    pub limit: Option<u32>,
+    pub channel_id: Option<String>,
+}
+
 /// Get latest videos from channels in a group with pagination
 #[tracing::instrument(name = "Get group videos", skip(cookies, inner))]
 pub async fn get_group_videos(
     cookies: Cookies,
     State(inner): State<InnerState>,
     Path(group_id): Path<String>,
-    Query(params): Query<PaginationParams>,
+    Query(params): Query<VideoQueryParams>,
 ) -> Result<Json<PaginatedResponse<VideoResponse>>, AppError> {
     let InnerState { sea_db, .. } = inner;
 
@@ -447,10 +460,19 @@ pub async fn get_group_videos(
     let limit = params.limit.unwrap_or(20).max(1).min(50);
     let offset = (page - 1) * limit;
 
+    // Build base query with optional channel filter
+    let channel_id = params.channel_id;
+
     // Count total videos for pagination
-    let total_count = videos::Entity::find()
+    let mut count_query = videos::Entity::find()
         .filter(videos::Column::GroupId.eq(&group_id))
-        .filter(videos::Column::UserId.eq(&user_id))
+        .filter(videos::Column::UserId.eq(&user_id));
+
+    if let Some(ref ch_id) = channel_id {
+        count_query = count_query.filter(videos::Column::ChannelId.eq(ch_id));
+    }
+
+    let total_count = count_query
         .count(&sea_db)
         .await
         .map_err(AppError::SeaORM)?;
@@ -461,9 +483,15 @@ pub async fn get_group_videos(
     let has_prev = page > 1;
 
     // Fetch videos from all channels in the group
-    let videos = videos::Entity::find()
+    let mut videos_query = videos::Entity::find()
         .filter(videos::Column::GroupId.eq(&group_id))
-        .filter(videos::Column::UserId.eq(&user_id))
+        .filter(videos::Column::UserId.eq(&user_id));
+
+    if let Some(ref ch_id) = channel_id {
+        videos_query = videos_query.filter(videos::Column::ChannelId.eq(ch_id));
+    }
+
+    let videos = videos_query
         .order_by_desc(videos::Column::PublishedAt)
         .limit(limit as u64)
         .offset(offset as u64)
@@ -495,6 +523,57 @@ pub async fn get_group_videos(
     };
 
     Ok(Json(response))
+}
+
+/// Delete all videos from a group
+#[tracing::instrument(name = "Delete group videos", skip(cookies, inner))]
+pub async fn delete_group_videos(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(group_id): Path<String>,
+) -> Result<Json<ApiResponse<String>>, AppError> {
+    let InnerState { sea_db, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    let group = groups::Entity::find()
+        .filter(groups::Column::Id.eq(&group_id))
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+        .ok_or_else(|| AppError::NotFound(format!("Group {} not found", group_id)))?;
+
+    if group.user_id != user_id {
+        return Err(AppError::Permission(anyhow::anyhow!(
+            "You don't have permission to delete videos in this group"
+        )));
+    }
+
+    let delete_result = videos::Entity::delete_many()
+        .filter(videos::Column::GroupId.eq(&group_id))
+        .filter(videos::Column::UserId.eq(&user_id))
+        .exec(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    let deleted_count = delete_result;
+
+    tracing::info!(
+        "Deleted videos for group {} by user {}",
+        group_id,
+        user_id
+    );
+
+    Ok(Json(ApiResponse::success("Videos deleted successfully".to_string())))
 }
 
 /// Sync videos from YouTube for all channels in a group
