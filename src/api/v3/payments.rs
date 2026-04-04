@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use tracing::{debug, error, info};
 use chrono::{Utc};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set, TransactionTrait};
-use crate::{InnerState, api::common::ApiResponse, errors::AppError, api::v3::entities::{subscription_plans, subscription_plans_users, users}};
+use tower_cookies::Cookies;
+use crate::{InnerState, api::common::ApiResponse, errors::AppError, api::{v1::user::get_user_id_from_token, v3::entities::{subscription_plans, subscription_plans_users, users}}};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CreateCheckoutSessionRequest {
@@ -248,8 +249,15 @@ async fn activate_subscription_from_dodo_webhook(
                 error!("Failed to parse created_at timestamp: {}", e);
                 AppError::BadRequest("Invalid timestamp format".to_string())
             })?)),
+        ended_at: Set(Some(chrono::DateTime::parse_from_rfc3339(&payload.data.next_billing_date)
+            .map_err(|e| {
+                error!("Failed to parse next_billing_date timestamp: {}", e);
+                AppError::BadRequest("Invalid next_billing_date format".to_string())
+            })?)),
         created_at: Set(Some(Utc::now().fixed_offset())),
         updated_at: Set(Some(Utc::now().fixed_offset())),
+        external_subscription_id: Set(Some(payload.data.subscription_id.clone())),
+        external_customer_id: Set(Some(payload.data.customer.customer_id.clone())),
         ..Default::default()
     };
 
@@ -282,4 +290,140 @@ pub async fn handle_dodo_subscription_webhook(
     activate_subscription_from_dodo_webhook(&inner, &payload).await?;
     
     Ok(Json(ApiResponse::success("Subscription activated successfully".to_string())))
+}
+
+/// Cancel the user's subscription
+#[tracing::instrument(name = "Cancel user subscription", skip(inner, cookies))]
+pub async fn cancel_subscription(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+) -> Result<Json<ApiResponse<String>>, AppError> {
+    let db = &inner.sea_db;
+    
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .ok_or_else(|| {
+            tracing::warn!("cancel_subscription: Missing authentication token");
+            AppError::Authentication(anyhow::anyhow!("Missing auth token"))
+        })?;
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+    
+    info!("Canceling subscription for user: {}", user_id);
+    
+    // Find active subscription
+    let active_subscriptions = subscription_plans_users::Entity::find()
+        .filter(subscription_plans_users::Column::UserId.eq(user_id.clone()))
+        .filter(subscription_plans_users::Column::EndedAt.is_null())
+        .all(db)
+        .await
+        .map_err(AppError::SeaORM)?;
+    
+    if active_subscriptions.is_empty() {
+        return Ok(Json(ApiResponse::success("No active subscription to cancel".to_string())));
+    }
+    
+    // Get the external subscription ID from the first active subscription
+    let external_subscription_id = active_subscriptions
+        .first()
+        .and_then(|s| s.external_subscription_id.clone())
+        .ok_or_else(|| {
+            error!("No external subscription ID found for user: {}", user_id);
+            AppError::BadRequest("No external subscription ID found".to_string())
+        })?;
+    
+    info!("Calling Dodo API to cancel subscription: {}", external_subscription_id);
+    
+    // Call Dodo API to cancel subscription
+    let client = reqwest::Client::new();
+    
+    let dodo_api_key = std::env::var("DODO_API_KEY")
+        .map_err(|_| AppError::BadRequest("DODO_API_KEY not set".to_string()))?;
+    
+    let environment = std::env::var("DODO_ENVIRONMENT")
+        .unwrap_or_else(|_| "test_mode".to_string());
+    let environment_for_get = environment.clone();
+    
+    let url = std::env::var("DODO_URL")
+        .unwrap_or_else(|_| "test_mode".to_string());
+
+    let dodo_cancel_url = format!("{}/subscriptions/{}", url, external_subscription_id);
+    
+    let request_body = serde_json::json!({
+        "cancel_at_next_billing_date": true
+    });
+    
+    let response = client
+        .patch(&dodo_cancel_url)
+        .header("Authorization", format!("Bearer {}", dodo_api_key))
+        .header("Content-Type", "application/json")
+        .header("Dodo-Environment", environment)
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| {
+            error!("Failed to call Dodo cancel API: {}", e);
+            AppError::ExternalService(anyhow::anyhow!("Failed to cancel subscription with Dodo"))
+        })?;
+    
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        error!("Dodo cancel API error: {}", error_text);
+        return Err(AppError::ExternalService(anyhow::anyhow!(
+            "Failed to cancel subscription: {}",
+            error_text
+        )));
+    }
+    
+    info!("Dodo API subscription canceled successfully");
+    
+    // Fetch subscription details from Dodo to get the expiration date
+    let dodo_get_url = format!("{}/subscriptions/{}", url, external_subscription_id);
+    
+    let get_response = client
+        .get(&dodo_get_url)
+        .header("Authorization", format!("Bearer {}", dodo_api_key))
+        .header("Content-Type", "application/json")
+        .header("Dodo-Environment", environment_for_get)
+        .send()
+        .await
+        .map_err(|e| {
+            error!("Failed to call Dodo get subscription API: {}", e);
+            AppError::ExternalService(anyhow::anyhow!("Failed to get subscription details from Dodo"))
+        })?;
+    
+    let subscription_details: serde_json::Value = get_response.json().await.map_err(|e| {
+        error!("Failed to parse Dodo get subscription response: {}", e);
+        AppError::ExternalService(anyhow::anyhow!("Failed to parse subscription details"))
+    })?;
+
+    info!("Dodo get subscription response: {:?}", subscription_details);
+    
+    let expires_at = subscription_details
+        .get("next_billing_date")
+        .and_then(|v: &serde_json::Value| v.as_str())
+        .ok_or_else(|| {
+            error!("expires_at not found in Dodo response: {:?}", subscription_details);
+            AppError::BadRequest("expires_at not found in Dodo response".to_string())
+        })?;
+    
+    let expires_at_date = chrono::DateTime::parse_from_rfc3339(expires_at)
+        .map_err(|e| {
+            error!("Failed to parse expires_at: {}", e);
+            AppError::BadRequest("Invalid expires_at format".to_string())
+        })?;
+    
+    // End all active subscriptions in local database with the expiration date
+    for mut subscription in active_subscriptions {
+        info!("Ending local subscription {} for user {} at {}", subscription.id, user_id, expires_at);
+        
+        let mut active_model: subscription_plans_users::ActiveModel = subscription.into();
+        active_model.ended_at = Set(Some(expires_at_date));
+        active_model.update(db).await.map_err(AppError::SeaORM)?;
+    }
+    
+    info!("Successfully canceled subscription for user: {}", user_id);
+    
+    Ok(Json(ApiResponse::success("Subscription canceled successfully".to_string())))
 }
