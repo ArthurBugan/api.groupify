@@ -203,7 +203,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .layer(Extension(shared_state));
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3001")
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3010")
         .await
         .expect("Could not initialize TcpListener");
 
