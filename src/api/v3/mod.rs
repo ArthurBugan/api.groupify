@@ -8,6 +8,8 @@ pub mod share_links;
 pub mod users;
 pub mod payments;
 pub mod blog;
+pub mod proxy;
+pub mod websites;
 
 use axum::{middleware, Router};
 use axum::routing::{delete, get, patch, post};
@@ -25,6 +27,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
     Router::new()
         .route("/api/v3/health", get(|| async { "v3 health check ok!" }))
         .route("/api/v3/animes", get(animes::all_animes_v3))
+        .route("/api/v3/websites", get(websites::all_websites_v3))
         .route("/api/v3/groups", get(groups::all_groups_v3))
         .route("/api/v3/groups/{group_id}/channels", post(groups::create_channel_in_group))
         .route("/api/v3/groups/{group_id}/videos", get(groups::get_group_videos))
@@ -36,6 +39,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/share-links/{share_link_id}", patch(share_links::update_share_link))
         .route("/api/v3/share-links/{share_link_id}", delete(share_links::delete_share_link))
         .route("/api/v3/me", get(users::me))
+        .route("/api/v3/proxy/fetch-url", post(proxy::fetch_url_metadata))
         .route("/api/v3/payments", post(payments::create_checkout_session))
         .route("/api/v3/payments/cancel", post(payments::cancel_subscription))
         .layer(CookieManagerLayer::new())

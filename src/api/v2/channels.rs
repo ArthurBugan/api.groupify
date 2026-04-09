@@ -1,3 +1,5 @@
+use std::task::Poll;
+
 use crate::api::common::limits::enforce_channel_addition_limit;
 use crate::api::common::utils::timeout_query;
 use crate::api::common::ApiResponse;
@@ -149,85 +151,72 @@ pub async fn all_channels(
         offset
     );
 
-    // Build the base query
-    let mut base_query = String::from(
-        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
-         INNER JOIN users u ON u.id = c.user_id 
-         LEFT JOIN groups g ON g.id = c.group_id 
-         WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
-         UNION ALL 
-         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
-         INNER JOIN users u ON u.id = yc.user_id 
-         WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)"
-    );
+    // Optimized single query with CTEs
+    let query = if params.search.is_some() && !params.search.as_ref().unwrap().trim().is_empty() {
+        let search_pattern = format!("%{}%", params.search.as_ref().unwrap().trim());
+        r#"
+            WITH user_channels AS (
+                SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url, c.content_type 
+                FROM channels c 
+                LEFT JOIN groups g ON g.id = c.group_id 
+                WHERE c.user_id = $1 AND (c.content_type = 'youtube' OR c.content_type IS NULL)
+            ),
+            user_youtube_channels AS (
+                SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url, 'youtube' as content_type 
+                FROM youtube_channels yc 
+                WHERE yc.user_id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
+            )
+            SELECT * FROM (
+                SELECT * FROM user_channels 
+                UNION ALL 
+                SELECT * FROM user_youtube_channels
+            ) combined 
+            WHERE LOWER(REPLACE(name, ' ', '')) LIKE LOWER(REPLACE($2, ' ', '')) 
+               OR LOWER(REPLACE(COALESCE(group_name,''), ' ', '')) LIKE LOWER(REPLACE($2, ' ', ''))
+            ORDER BY created_at DESC 
+            LIMIT $3 OFFSET $4
+        "#
+    } else {
+        r#"
+            WITH user_channels AS (
+                SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url, c.content_type 
+                FROM channels c 
+                LEFT JOIN groups g ON g.id = c.group_id 
+                WHERE c.user_id = $1 AND (c.content_type = 'youtube' OR c.content_type IS NULL)
+            ),
+            user_youtube_channels AS (
+                SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url, 'youtube' as content_type 
+                FROM youtube_channels yc 
+                WHERE yc.user_id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
+            )
+            SELECT * FROM user_channels UNION ALL SELECT * FROM user_youtube_channels ORDER BY created_at DESC LIMIT $2 OFFSET $3
+        "#
+    };
 
-    // Add search filter if provided
-    if let Some(search) = &params.search {
-        if !search.trim().is_empty() {
-            base_query = format!(
-                "SELECT * FROM ({}) AS combined_channels WHERE LOWER(REPLACE(name, ' ', '')) ILIKE LOWER(REPLACE($2, ' ', '')) OR LOWER(REPLACE(group_name, ' ', '')) ILIKE LOWER(REPLACE($3, ' ', ''))",
-                base_query
-            );
-        }
-    }
+    let search_pattern = if params.search.is_some() && !params.search.as_ref().unwrap().trim().is_empty() {
+        Some(format!("%{}%", params.search.as_ref().unwrap().trim()))
+    } else {
+        None
+    };
 
-    // Add ordering and pagination
-    base_query.push_str(" ORDER BY created_at DESC LIMIT $4 OFFSET $5");
-
-    // Execute the main query
     let channels = match tokio::time::timeout(
         fetch_channels_timeout,
         async {
-            if let Some(search) = &params.search {
-                if !search.trim().is_empty() {
-                    let search_pattern = format!("%{}%", search.trim());
-                    sqlx::query_as::<_, ChannelWithGroup>(
-                        &base_query
-                    )
+            if let Some(ref pattern) = search_pattern {
+                sqlx::query_as::<_, ChannelWithGroup>(query)
                     .bind(&user_id)
-                    .bind(&search_pattern)
-                    .bind(&search_pattern)
+                    .bind(pattern)
                     .bind(limit)
                     .bind(offset)
                     .fetch_all(&db)
                     .await
-                } else {
-                    // No search parameter, use combined query
-                    sqlx::query_as::<_, ChannelWithGroup>(
-                        "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url, c.content_type as content_type FROM channels c 
-                         INNER JOIN users u ON u.id = c.user_id 
-                         LEFT JOIN groups g ON g.id = c.group_id 
-                         WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
-                         UNION ALL 
-                         SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
-                         INNER JOIN users u ON u.id = yc.user_id 
-                         WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
-                         ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-                    )
-                    .bind(&user_id)
-                    .bind(limit)
-                    .bind(offset)
-                    .fetch_all(&db)
-                    .await
-                }
             } else {
-                // No search parameter
-                sqlx::query_as::<_, ChannelWithGroup>(
-                    "SELECT c.id, c.user_id, c.group_id, c.name, c.channel_id, c.thumbnail, c.created_at, c.updated_at, g.name as group_name, g.icon as group_icon, c.url as url, c.content_type as content_type FROM channels c 
-                    INNER JOIN users u ON u.id = c.user_id 
-                    LEFT JOIN groups g ON g.id = c.group_id 
-                    WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
-                    UNION ALL 
-                    SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url as url, 'youtube' as content_type FROM youtube_channels yc 
-                    INNER JOIN users u ON u.id = yc.user_id 
-                    WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
-                    ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-                )
-                .bind(&user_id)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(&db)
-                .await
+                sqlx::query_as::<_, ChannelWithGroup>(query)
+                    .bind(&user_id)
+                    .bind(limit)
+                    .bind(offset)
+                    .fetch_all(&db)
+                    .await
             }
         }
     )
@@ -259,57 +248,46 @@ pub async fn all_channels(
         }
     };
 
-    // Count total channels for pagination
+    // Count total channels for pagination - simplified
+    let count_query = if search_pattern.is_some() {
+        r#"
+            SELECT COUNT(*) FROM (
+                WITH user_channels AS (
+                    SELECT c.id, c.name, c.group_id FROM channels c 
+                    WHERE c.user_id = $1 AND (c.content_type = 'youtube' OR c.content_type IS NULL)
+                ),
+                user_youtube_channels AS (
+                    SELECT yc.id, yc.name, NULL as group_id FROM youtube_channels yc 
+                    WHERE yc.user_id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
+                )
+                SELECT * FROM user_channels UNION ALL SELECT * FROM user_youtube_channels
+            ) combined WHERE LOWER(REPLACE(name, ' ', '')) LIKE LOWER(REPLACE($2, ' ', ''))
+        "#
+    } else {
+        r#"
+            SELECT (
+                SELECT COUNT(*) FROM channels c WHERE c.user_id = $1 AND (c.content_type = 'youtube' OR c.content_type IS NULL)
+            ) + (
+                SELECT COUNT(*) FROM youtube_channels yc 
+                WHERE yc.user_id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
+            )
+        "#
+    };
+
     let total_count = match tokio::time::timeout(
         fetch_channels_timeout,
         async {
-            if let Some(search) = &params.search {
-                if !search.trim().is_empty() {
-                    let search_pattern = format!("%{}%", search.trim());
-                    sqlx::query_scalar::<_, i64>(
-                        "SELECT COUNT(*) FROM (
-                            SELECT c.id, c.name, g.name as group_name, c.content_type as content_type FROM channels c 
-                            INNER JOIN users u ON u.id = c.user_id 
-                            LEFT JOIN groups g ON g.id = c.group_id 
-                            WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
-                            UNION ALL 
-                            SELECT yc.id, yc.name, NULL as group_name, 'youtube' as content_type FROM youtube_channels yc 
-                            INNER JOIN users u ON u.id = yc.user_id 
-                            WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
-                        ) AS combined_channels 
-                        WHERE LOWER(REPLACE(name, ' ', '')) ILIKE LOWER(REPLACE($2, ' ', '')) OR LOWER(REPLACE(group_name, ' ', '')) ILIKE LOWER(REPLACE($3, ' ', ''))"
-                    )
+            if let Some(ref pattern) = search_pattern {
+                sqlx::query_scalar::<_, i64>(count_query)
                     .bind(&user_id)
-                    .bind(&search_pattern)
-                    .bind(&search_pattern)
+                    .bind(pattern)
                     .fetch_one(&db)
                     .await
-                } else {
-                    sqlx::query_scalar::<_, i64>(
-                        "SELECT COUNT(*) FROM channels c 
-                         INNER JOIN users u ON u.id = c.user_id 
-                         WHERE u.id = $1"
-                    )
-                    .bind(&user_id)
-                    .fetch_one(&db)
-                    .await
-                }
             } else {
-                sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM (
-                        SELECT c.id FROM channels c 
-                        INNER JOIN users u ON u.id = c.user_id 
-                        LEFT JOIN groups g ON g.id = c.group_id 
-                        WHERE (c.content_type = 'youtube' OR c.content_type IS NULL) AND u.id = $1
-                        UNION ALL 
-                        SELECT yc.id FROM youtube_channels yc 
-                        INNER JOIN users u ON u.id = yc.user_id 
-                        WHERE u.id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
-                    ) AS combined_channels"
-                )
-                .bind(&user_id)
-                .fetch_one(&db)
-                .await
+                sqlx::query_scalar::<_, i64>(count_query)
+                    .bind(&user_id)
+                    .fetch_one(&db)
+                    .await
             }
         }
     )
@@ -335,9 +313,13 @@ pub async fn all_channels(
         }
     };
 
-    if let Err(e) = sync_channels_from_youtube(cookies.clone(), State(inner.clone())).await {
-        tracing::error!("Error syncing channels from YouTube: {:?}", e);
-    }
+    let inner_for_sync = inner.clone();
+    let cookies_for_sync = cookies.clone();
+    tokio::spawn(async move {
+        if let Err(e) = sync_channels_from_youtube(cookies_for_sync, State(inner_for_sync)).await {
+            tracing::error!("Error syncing channels from YouTube: {:?}", e);
+        }
+    });
 
     let total_pages = ((total_count as f64) / (limit as f64)).ceil() as i32;
 
