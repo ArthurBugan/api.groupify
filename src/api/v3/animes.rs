@@ -3,7 +3,10 @@ use axum::{
     extract::{Query, State},
     Json,
 };
-use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, JoinType, QueryFilter, QuerySelect, RelationTrait, sea_query::Expr};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, FromQueryResult, JoinType, Order,
+    QueryFilter, QueryOrder, QuerySelect, RelationTrait, sea_query::Expr,
+};
 use tower_cookies::Cookies;
 
 use crate::{
@@ -60,71 +63,80 @@ pub async fn all_animes_v3(
         return Ok(Json(cached));
     }
 
-    let mut channels_q = channels::Entity::find()
-        .filter(channels::Column::UserId.eq(user_id.clone()))
-        .filter(channels::Column::ContentType.eq("anime"))
-        .join(JoinType::LeftJoin, channels::Relation::Groups.def())
-        .select_only()
-        .column(channels::Column::Id)
-        .column(channels::Column::UserId)
-        .column(channels::Column::GroupId)
-        .column(channels::Column::Name)
-        .expr_as(Expr::cust("COALESCE(channels.channel_id, '')"), "channel_id")
-        .column(channels::Column::Thumbnail)
-        .column(channels::Column::CreatedAt)
-        .column(channels::Column::UpdatedAt)
-        .column_as(groups::Column::Name, "group_name")
-        .column_as(groups::Column::Icon, "group_icon")
-        .column(channels::Column::Url)
-        .column(channels::Column::ContentType)
-        .expr_as(Expr::cust("NULL"), "average_rating")
-        .expr_as(Expr::cust("NULL"), "launch_year");
+    let search_pattern = params.search.as_ref().and_then(|s| {
+        if s.trim().is_empty() { None } else { Some(format!("%{}%", s.trim())) }
+    });
 
-    if let Some(search) = &params.search {
-        if !search.trim().is_empty() {
-            channels_q = channels_q.filter(channels::Column::Name.ilike(format!("%{}%", search)));
+    let user_animes: Vec<UnifiedAnime> = {
+        let mut q = channels::Entity::find()
+            .filter(channels::Column::UserId.eq(user_id.clone()))
+            .filter(channels::Column::ContentType.eq("anime"))
+            .join(JoinType::LeftJoin, channels::Relation::Groups.def())
+            .select_only()
+            .column(channels::Column::Id)
+            .column(channels::Column::UserId)
+            .column(channels::Column::GroupId)
+            .column(channels::Column::Name)
+            .expr_as(Expr::cust("COALESCE(channels.channel_id, '')"), "channel_id")
+            .column(channels::Column::Thumbnail)
+            .column(channels::Column::CreatedAt)
+            .column(channels::Column::UpdatedAt)
+            .column_as(groups::Column::Name, "group_name")
+            .column_as(groups::Column::Icon, "group_icon")
+            .column(channels::Column::Url)
+            .column(channels::Column::ContentType)
+            .expr_as(Expr::cust("NULL"), "average_rating")
+            .expr_as(Expr::cust("NULL"), "launch_year")
+            .order_by(channels::Column::CreatedAt, Order::Desc)
+            .limit(limit as u64)
+            .offset(offset as u64);
+
+        if let Some(ref pattern) = search_pattern {
+            q = q.filter(channels::Column::Name.ilike(pattern));
         }
-    }
 
-    let user_animes: Vec<UnifiedAnime> = channels_q
-        .into_model::<UnifiedAnime>()
-        .all(&sea_db)
-        .await
-        .map_err(AppError::SeaORM)?;
+        q.into_model::<UnifiedAnime>()
+            .all(&sea_db)
+            .await
+            .map_err(AppError::SeaORM)?
+    };
 
-    let mut crunchy_q = crunchyroll_channels::Entity::find()
-        .select_only()
-        .column(crunchyroll_channels::Column::Id)
-        .expr_as(Expr::cust("NULL"), "user_id")
-        .expr_as(Expr::cust("NULL"), "group_id")
-        .column_as(crunchyroll_channels::Column::Title, "name")
-        .expr_as(Expr::cust("COALESCE(crunchyroll_channels.channel_id, '')"), "channel_id")
-        .column_as(crunchyroll_channels::Column::PosterImageUrl, "thumbnail")
-        .expr_as(Expr::cust("NULL"), "created_at")
-        .expr_as(Expr::cust("NULL"), "updated_at")
-        .column_as(crunchyroll_channels::Column::Title, "group_name")
-        .expr_as(Expr::cust("NULL"), "group_icon")
-        .column_as(crunchyroll_channels::Column::Id, "url")
-        .expr_as(Expr::cust("'anime'"), "content_type")
-        .column_as(crunchyroll_channels::Column::AverageRating, "average_rating")
-        .column(crunchyroll_channels::Column::LaunchYear)
-        .filter(crunchyroll_channels::Column::Title.is_not_null())
-        .filter(Expr::cust(format!(
-            "NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.content_type = 'anime' AND c2.user_id = '{}' AND c2.name = crunchyroll_channels.title)",
-            user_id
-        )));
+    let crunchy_animes: Vec<UnifiedAnime> = {
+        let mut q = crunchyroll_channels::Entity::find()
+            .select_only()
+            .column(crunchyroll_channels::Column::Id)
+            .expr_as(Expr::cust("NULL"), "user_id")
+            .expr_as(Expr::cust("NULL"), "group_id")
+            .column_as(crunchyroll_channels::Column::Title, "name")
+            .expr_as(Expr::cust("COALESCE(crunchyroll_channels.channel_id, '')"), "channel_id")
+            .column_as(crunchyroll_channels::Column::PosterImageUrl, "thumbnail")
+            .expr_as(Expr::cust("NULL"), "created_at")
+            .expr_as(Expr::cust("NULL"), "updated_at")
+            .column_as(crunchyroll_channels::Column::Title, "group_name")
+            .expr_as(Expr::cust("NULL"), "group_icon")
+            .column_as(crunchyroll_channels::Column::Id, "url")
+            .expr_as(Expr::cust("'anime'"), "content_type")
+            .column_as(crunchyroll_channels::Column::AverageRating, "average_rating")
+            .column(crunchyroll_channels::Column::LaunchYear)
+            .filter(crunchyroll_channels::Column::Title.is_not_null())
+            .filter(Expr::cust(format!(
+                "NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.content_type = 'anime' AND c2.user_id = '{}' AND c2.name = crunchyroll_channels.title)",
+                user_id
+            )))
+            .order_by(crunchyroll_channels::Column::LaunchYear, Order::Desc)
+            .order_by(crunchyroll_channels::Column::AverageRating, Order::Desc)
+            .limit(limit as u64)
+            .offset(offset as u64);
 
-    if let Some(search) = &params.search {
-        if !search.trim().is_empty() {
-            crunchy_q = crunchy_q.filter(crunchyroll_channels::Column::Title.ilike(format!("%{}%", search)));
+        if let Some(ref pattern) = search_pattern {
+            q = q.filter(crunchyroll_channels::Column::Title.ilike(pattern));
         }
-    }
 
-    let crunchy_animes: Vec<UnifiedAnime> = crunchy_q
-        .into_model::<UnifiedAnime>()
-        .all(&sea_db)
-        .await
-        .map_err(AppError::SeaORM)?;
+        q.into_model::<UnifiedAnime>()
+            .all(&sea_db)
+            .await
+            .map_err(AppError::SeaORM)?
+    };
 
     let mut combined = Vec::with_capacity(user_animes.len() + crunchy_animes.len());
     combined.extend(user_animes);
