@@ -51,6 +51,8 @@ pub struct BlogResponse {
 pub async fn get_blog_posts(
     Query(params): Query<BlogQueryParams>,
 ) -> Result<Json<BlogResponse>, axum::http::StatusCode> {
+    let directus_url = std::env::var("DIRECTUS_URL")
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let client = Client::new();
     let mut query_params = HashMap::new();
 
@@ -96,7 +98,7 @@ pub async fn get_blog_posts(
     query_params.insert("sort", "-date_created".to_string());
 
     let response: reqwest::Response = client
-        .get("https://coolify.groupify.dev/directus/items/posts")
+        .get(format!("{}/items/posts", directus_url))
         .query(&query_params)
         .send()
         .await
@@ -145,8 +147,8 @@ pub async fn get_blog_posts(
             // Prefix image URL with Directus assets endpoint
             if !blog_post.image.is_empty() && !blog_post.image.starts_with("http") {
                 blog_post.image = format!(
-                    "https://coolify.groupify.dev/directus/assets/{}",
-                    blog_post.image
+                    "{}/assets/{}",
+                    directus_url, blog_post.image
                 );
             }
 
@@ -155,7 +157,7 @@ pub async fn get_blog_posts(
         .collect();
 
     let total_count_response = client
-        .get("https://coolify.groupify.dev/directus/items/posts?aggregate[count]=*")
+        .get(format!("{}/items/posts?aggregate[count]=*", directus_url))
         .send()
         .await
         .map_err(|e| {
@@ -193,12 +195,14 @@ pub async fn get_blog_posts(
 pub async fn get_blog_post_by_slug(
     axum::extract::Path(slug): axum::extract::Path<String>,
 ) -> Result<Json<BlogPost>, axum::http::StatusCode> {
+    let directus_url = std::env::var("DIRECTUS_URL")
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let client = Client::new();
 
     let response = client
         .get(format!(
-            "https://coolify.groupify.dev/directus/items/posts?filter[slug][_eq]={}",
-            slug
+            "{}/items/posts?filter[slug][_eq]={}",
+            directus_url, slug
         ))
         .send()
         .await
@@ -254,8 +258,8 @@ pub async fn get_blog_post_by_slug(
     // Prefix image URL with Directus assets endpoint
     if !blog_post.image.is_empty() && !blog_post.image.starts_with("http") {
         blog_post.image = format!(
-            "https://coolify.groupify.dev/directus/assets/{}",
-            blog_post.image
+            "{}/assets/{}",
+            directus_url, blog_post.image
         );
     }
 
