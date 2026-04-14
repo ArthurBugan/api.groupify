@@ -307,6 +307,8 @@ pub async fn create_channel_in_group(
     // Generate unique channel ID from user_id and url
     let channel_id = format!("{}/{}", user_id, payload.url.clone().unwrap_or_default());
     let now = Utc::now().fixed_offset();
+    
+    let content_type = payload.content_type.unwrap_or_else(|| "youtube".to_string());
 
     // Create the channel
     let new_channel = channels::ActiveModel {
@@ -320,7 +322,7 @@ pub async fn create_channel_in_group(
         new_content: Set(Some(false)),
         channel_id: Set(Some(channel_id.clone())),
         url: Set(payload.url),
-        content_type: Set(Some("youtube".to_string())),
+        content_type: Set(Some(content_type)),
     };
 
     let channel = new_channel.insert(&sea_db).await.map_err(AppError::SeaORM)?;
