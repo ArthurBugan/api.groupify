@@ -31,6 +31,7 @@ pub fn create_v2_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v2/groups/{group_id}", put(groups::update_group))
         .route("/api/v2/groups/{group_id}", delete(groups::delete_group))
         .route("/api/v2/groups/{group_id}/display-order", put(groups::update_display_order))
+        .route("/api/v2/groups/display-order/bulk", put(groups::bulk_update_display_order))
 
         .route("/api/v2/channels", get(channels::all_channels))
         .route("/api/v2/channels/{channel_id}", get(channels::get_channel_by_id))
