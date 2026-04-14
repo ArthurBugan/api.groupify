@@ -87,9 +87,7 @@ pub async fn all_animes_v3(
             .column(channels::Column::ContentType)
             .expr_as(Expr::cust("NULL"), "average_rating")
             .expr_as(Expr::cust("NULL"), "launch_year")
-            .order_by(channels::Column::CreatedAt, Order::Desc)
-            .limit(limit as u64)
-            .offset(offset as u64);
+            .order_by(channels::Column::CreatedAt, Order::Desc);
 
         if let Some(ref pattern) = search_pattern {
             q = q.filter(channels::Column::Name.ilike(pattern));
@@ -124,9 +122,7 @@ pub async fn all_animes_v3(
                 user_id
             )))
             .order_by(crunchyroll_channels::Column::LaunchYear, Order::Desc)
-            .order_by(crunchyroll_channels::Column::AverageRating, Order::Desc)
-            .limit(limit as u64)
-            .offset(offset as u64);
+            .order_by(crunchyroll_channels::Column::AverageRating, Order::Desc);
 
         if let Some(ref pattern) = search_pattern {
             q = q.filter(crunchyroll_channels::Column::Title.ilike(pattern));
