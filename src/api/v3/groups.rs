@@ -123,8 +123,11 @@ pub async fn all_groups_v3(
         "CASE WHEN groups.display_order = 0 OR groups.display_order IS NULL THEN 100 ELSE 0 END",
     );
 
-    // OPTIMIZATION: Single query with subquery for channel counts
-    // This eliminates the need for a second query to get channel counts
+    let order_expr = Expr::cust(
+        "COALESCE(NULLIF(groups.display_order, 0), 999999)",
+    );
+
+    // Single query with subquery for channel counts
     let mut data_q = groups::Entity::find()
         .join(JoinType::LeftJoin, groups::Relation::GroupMembers.def())
         .filter(base_access)
@@ -150,8 +153,7 @@ pub async fn all_groups_v3(
             ),
             "channel_count"
         )
-        .expr_as(order_expr.clone(), "order_rank")
-        .order_by(Expr::cust("order_rank"), Order::Asc)
+        .order_by(groups::Column::DisplayOrder, Order::Asc)
         .distinct()
         .limit(limit as u64)
         .offset(offset as u64);
