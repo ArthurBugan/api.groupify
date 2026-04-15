@@ -72,6 +72,60 @@ pub struct UpdateDisplayOrderResponse {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupDisplayOrder {
+    #[serde(rename = "groupId")]
+    pub group_id: String,
+    pub display_order: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkUpdateDisplayOrderRequest {
+    pub orders: Vec<GroupDisplayOrder>,
+}
+
+#[tracing::instrument(name = "Bulk update groups display order", skip(cookies, inner, payload))]
+pub async fn bulk_update_display_order(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Json(payload): Json<BulkUpdateDisplayOrderRequest>,
+) -> Result<Json<UpdateDisplayOrderResponse>, AppError> {
+    let InnerState { db, redis_cache, .. } = inner;
+    
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+    
+    let mut tx = db.begin().await?;
+    
+    for order in payload.orders {
+        sqlx::query("UPDATE groups SET display_order = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3")
+            .bind(order.display_order)
+            .bind(&order.group_id)
+            .bind(&user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    
+    tx.commit().await?;
+    
+    let _ = redis_cache.del_pattern(&format!("user:{}:group:*", user_id)).await;
+    
+    Ok(Json(UpdateDisplayOrderResponse {
+        success: true,
+        message: "Display orders updated successfully".to_string(),
+    }))
+}
+
 #[derive(Debug, Serialize)]
 pub struct GetGroupResponse {
     pub success: bool,
