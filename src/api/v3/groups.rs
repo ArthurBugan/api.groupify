@@ -41,6 +41,7 @@ struct GroupWithCountRow {
     pub parent_id: Option<String>,
     pub nesting_level: Option<i32>,
     pub display_order: Option<f64>,
+    pub enable_groupshelf: Option<bool>,
     pub channel_count: Option<i64>,
 }
 
@@ -143,6 +144,7 @@ pub async fn all_groups_v3(
         .column(groups::Column::ParentId)
         .column(groups::Column::NestingLevel)
         .column(groups::Column::DisplayOrder)
+        .column(groups::Column::EnableGroupshelf)
         // Use a correlated subquery to get channel count in the same query
         .expr_as(
             Expr::cust(
@@ -190,6 +192,7 @@ pub async fn all_groups_v3(
             parent_id: row.parent_id,
             nesting_level: row.nesting_level,
             display_order: row.display_order,
+            enable_groupshelf: row.enable_groupshelf,
             channel_count: Some(row.channel_count.unwrap_or(0)),
             channels: Vec::new(),
         })
@@ -728,4 +731,296 @@ pub async fn sync_group_videos(
             Err(e)
         }
     }
+}
+
+#[tracing::instrument(name = "Get groups with groupshelf enabled", skip(cookies, inner))]
+pub async fn get_groupshelf_groups(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Query(params): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<Group>>, AppError> {
+    let InnerState { sea_db, redis_cache, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    let page = params.page.unwrap_or(1).max(1);
+    let limit = params.limit.unwrap_or(10).max(1).min(100);
+    let offset = (page - 1) * limit;
+
+    let cache_key = format!(
+        "user:{}:groupshelf:{}:{}",
+        user_id,
+        page,
+        limit,
+    );
+
+    if let Ok(Some(cached)) = redis_cache
+        .get_json::<PaginatedResponse<Group>>(&cache_key)
+        .await
+    {
+        return Ok(Json(cached));
+    }
+
+    let count_q = groups::Entity::find()
+        .filter(groups::Column::EnableGroupshelf.eq(true));
+
+    let total_result_u64 = count_q
+        .count(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    let total_result = total_result_u64.try_into().unwrap();
+    let total_pages = ((total_result as f64) / (limit as f64)).ceil() as u32;
+    let has_next = page < total_pages;
+    let has_prev = page > 1;
+
+    let data_q = groups::Entity::find()
+        .filter(groups::Column::EnableGroupshelf.eq(true))
+        .order_by(groups::Column::DisplayOrder, Order::Asc)
+        .limit(limit as u64)
+        .offset(offset as u64);
+
+    let rows = data_q
+        .all(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    let out: Vec<Group> = rows
+        .into_iter()
+        .map(|row| Group {
+            id: Some(row.id),
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            name: row.name,
+            icon: row.icon,
+            user_id: row.user_id,
+            description: row.description,
+            category: row.category,
+            parent_id: row.parent_id,
+            nesting_level: row.nesting_level,
+            display_order: row.display_order,
+            enable_groupshelf: row.enable_groupshelf,
+            channel_count: None,
+            channels: Vec::new(),
+        })
+        .collect();
+
+    let response = PaginatedResponse {
+        data: out,
+        pagination: PaginationInfo {
+            page,
+            limit,
+            total: total_result,
+            total_pages,
+            has_next,
+            has_prev,
+        },
+    };
+
+    let _ = redis_cache.set_json(&cache_key, &response, 300).await;
+
+    Ok(Json(response))
+}
+
+#[tracing::instrument(name = "Copy groupshelf group to user", skip(cookies, inner))]
+pub async fn copy_groupshelf_group(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(group_id): Path<String>,
+) -> Result<Json<ApiResponse<Group>>, AppError> {
+    let InnerState { sea_db, redis_cache, .. } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    let source_group = groups::Entity::find()
+        .filter(groups::Column::Id.eq(&group_id))
+        .filter(groups::Column::EnableGroupshelf.eq(true))
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+        .ok_or_else(|| AppError::NotFound("Group not found or groupshelf not enabled".to_string()))?;
+
+    let existing_group = groups::Entity::find()
+        .filter(groups::Column::UserId.eq(&user_id))
+        .filter(groups::Column::Name.eq(&source_group.name))
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    if existing_group.is_some() {
+        return Err(AppError::BadRequest("You already own a group with this name".to_string()));
+    }
+
+    let now = Utc::now().fixed_offset();
+    let naive_now = now.naive_utc();
+
+    async fn copy_group_with_children(
+        sea_db: &sea_orm::DatabaseConnection,
+        source_group: &groups::Model,
+        user_id: &str,
+        now: chrono::NaiveDateTime,
+        parent_id_map: &mut std::collections::HashMap<String, String>,
+    ) -> Result<String, AppError> {
+        let new_group_id = Uuid::new_v4().to_string();
+
+        let new_group = groups::ActiveModel {
+            id: Set(new_group_id.clone()),
+            name: Set(source_group.name.clone()),
+            icon: Set(source_group.icon.clone()),
+            user_id: Set(user_id.to_string()),
+            description: Set(source_group.description.clone()),
+            category: Set(source_group.category.clone()),
+            parent_id: Set(source_group.parent_id.clone()),
+            nesting_level: Set(source_group.nesting_level),
+            display_order: Set(source_group.display_order),
+            enable_groupshelf: Set(Some(false)),
+            created_at: Set(Some(now)),
+            updated_at: Set(Some(now)),
+        };
+
+        let _created_group = new_group.insert(sea_db).await.map_err(AppError::SeaORM)?;
+
+        let channels = channels::Entity::find()
+            .filter(channels::Column::GroupId.eq(&source_group.id))
+            .all(sea_db)
+            .await
+            .map_err(AppError::SeaORM)?;
+
+        for channel in channels {
+            let new_channel_id = Uuid::new_v4().to_string();
+            let new_channel = channels::ActiveModel {
+                id: Set(new_channel_id),
+                group_id: Set(new_group_id.clone()),
+                user_id: Set(user_id.to_string()),
+                name: Set(channel.name),
+                thumbnail: Set(channel.thumbnail),
+                channel_id: Set(channel.channel_id),
+                content_type: Set(channel.content_type),
+                url: Set(channel.url),
+                new_content: Set(channel.new_content),
+                created_at: Set(Some(now)),
+                updated_at: Set(Some(now)),
+            };
+            new_channel.insert(sea_db).await.map_err(AppError::SeaORM)?;
+        }
+
+        parent_id_map.insert(source_group.id.clone(), new_group_id.clone());
+
+        Ok(new_group_id)
+    }
+
+    let mut parent_id_map = std::collections::HashMap::new();
+    let _root_group_id = copy_group_with_children(&sea_db, &source_group, &user_id, naive_now, &mut parent_id_map).await?;
+
+    let mut to_process: Vec<String> = vec![source_group.id.clone()];
+    while let Some(current_parent_id) = to_process.pop() {
+        let children = groups::Entity::find()
+            .filter(groups::Column::ParentId.eq(&current_parent_id))
+            .all(&sea_db)
+            .await
+            .map_err(AppError::SeaORM)?;
+
+        for child in children {
+            if let Some(new_parent_id) = parent_id_map.get(&current_parent_id) {
+                let new_child_id = Uuid::new_v4().to_string();
+
+                let new_child = groups::ActiveModel {
+                    id: Set(new_child_id.clone()),
+                    name: Set(child.name),
+                    icon: Set(child.icon),
+                    user_id: Set(user_id.clone()),
+                    description: Set(child.description),
+                    category: Set(child.category),
+                    parent_id: Set(Some(new_parent_id.clone())),
+                    nesting_level: Set(child.nesting_level),
+                    display_order: Set(child.display_order),
+                    enable_groupshelf: Set(Some(false)),
+                    created_at: Set(Some(naive_now)),
+                    updated_at: Set(Some(naive_now)),
+                };
+
+                let _created_child = new_child.insert(&sea_db).await.map_err(AppError::SeaORM)?;
+
+                let child_channels = channels::Entity::find()
+                    .filter(channels::Column::GroupId.eq(&child.id))
+                    .all(&sea_db)
+                    .await
+                    .map_err(AppError::SeaORM)?;
+
+                for channel in child_channels {
+                    let new_channel_id = format!("{}/{}", user_id, Uuid::new_v4().to_string());
+                    let new_channel = channels::ActiveModel {
+                        id: Set(new_channel_id),
+                        group_id: Set(new_child_id.clone()),
+                        user_id: Set(user_id.clone()),
+                        name: Set(channel.name),
+                        thumbnail: Set(channel.thumbnail),
+                        channel_id: Set(channel.channel_id),
+                        content_type: Set(channel.content_type),
+                        url: Set(channel.url),
+                        new_content: Set(channel.new_content),
+                        created_at: Set(Some(naive_now)),
+                        updated_at: Set(Some(naive_now)),
+                    };
+                    new_channel.insert(&sea_db).await.map_err(AppError::SeaORM)?;
+                }
+
+                parent_id_map.insert(child.id.clone(), new_child_id);
+                to_process.push(child.id);
+            }
+        }
+    }
+
+    let created_group = groups::Entity::find()
+        .filter(groups::Column::Id.eq(parent_id_map.get(&source_group.id).unwrap()))
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+        .ok_or_else(|| AppError::NotFound("Created group not found".to_string()))?;
+
+    let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groupshelf_pattern).await {
+        tracing::warn!("copy_groupshelf_group: redis DEL groupshelf error: {:?}", e);
+    }
+    let groups_pattern = format!("user:{}:groups:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groups_pattern).await {
+        tracing::warn!("copy_groupshelf_group: redis DEL groups error: {:?}", e);
+    }
+
+    let response_group = Group {
+        id: Some(created_group.id),
+        created_at: created_group.created_at,
+        updated_at: created_group.updated_at,
+        name: created_group.name,
+        icon: created_group.icon,
+        user_id: created_group.user_id,
+        description: created_group.description,
+        category: created_group.category,
+        parent_id: created_group.parent_id,
+        nesting_level: created_group.nesting_level,
+        display_order: created_group.display_order,
+        enable_groupshelf: created_group.enable_groupshelf,
+        channel_count: None,
+        channels: Vec::new(),
+    };
+
+    Ok(Json(ApiResponse::success(response_group)))
 }

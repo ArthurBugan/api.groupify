@@ -28,6 +28,7 @@ pub struct Group {
     pub parent_id: Option<String>,
     pub nesting_level: Option<i32>,
     pub display_order: Option<f64>,
+    pub enable_groupshelf: Option<bool>,
     #[sqlx(skip)]
     pub channel_count: Option<i64>,
     #[sqlx(skip)]
@@ -42,6 +43,7 @@ pub struct CreateGroupRequest {
     pub category: String,
     pub icon: String,
     pub parent_id: Option<String>,
+    pub enable_groupshelf: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +54,7 @@ pub struct UpdateGroupRequest {
     pub category: String,
     pub icon: String,
     pub parent_id: Option<String>,
+    pub enable_groupshelf: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -552,9 +555,9 @@ pub async fn create_group(
 
     // Insert the new group
     let insert_query = r#"
-        INSERT INTO groups (id, name, icon, user_id, description, category, parent_id, nesting_level, display_order)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        RETURNING id, created_at, updated_at, name, icon, user_id, description, category, parent_id, nesting_level, display_order
+        INSERT INTO groups (id, name, icon, user_id, description, category, parent_id, nesting_level, display_order, enable_groupshelf)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        RETURNING id, created_at, updated_at, name, icon, user_id, description, category, parent_id, nesting_level, display_order, enable_groupshelf
     "#;
 
     let new_group = match tokio::time::timeout(
@@ -569,6 +572,7 @@ pub async fn create_group(
             .bind(&payload.parent_id)
             .bind(&nesting_level)
             .bind(&display_order)
+            .bind(&payload.enable_groupshelf)
             .fetch_one(&db),
     )
     .await
@@ -610,6 +614,10 @@ pub async fn create_group(
     let animes_pattern = format!("user:{}:animes:*", user_id);
     if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
         tracing::warn!("create_group: redis DEL animes error: {:?}", e);
+    }
+    let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&groupshelf_pattern).await {
+        tracing::warn!("create_group: redis DEL groupshelf error: {:?}", e);
     }
     Ok(Json(CreateGroupResponse {
         success: true,
@@ -938,6 +946,10 @@ pub async fn delete_group(
                 if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
                     tracing::warn!("delete_group: redis DEL animes error: {:?}", e);
                 }
+                let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+                if let Err(e) = inner.redis_cache.del_pattern(&groupshelf_pattern).await {
+                    tracing::warn!("delete_group: redis DEL groupshelf error: {:?}", e);
+                }
 
                 tx.commit().await?;
                 Ok(Json(UpdateDisplayOrderResponse {
@@ -979,7 +991,7 @@ pub async fn get_group_by_id(
 ) -> Result<Json<GetGroupResponse>, AppError> {
     tracing::info!("Starting to fetch group by ID: {}", group_id);
 
-    let InnerState { db, .. } = inner.clone();
+    let InnerState { db, redis_cache, .. } = inner.clone();
     let fetch_timeout = tokio::time::Duration::from_millis(5000);
 
     let auth_token = cookies
@@ -1066,6 +1078,11 @@ pub async fn get_group_by_id(
 
     group.channels = channels;
     group.channel_count = Some(group.channels.len() as i64);
+
+    let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groupshelf_pattern).await {
+        tracing::warn!("get_group_by_id: redis DEL groupshelf error: {:?}", e);
+    }
 
     tracing::debug!(
         "Returning group {} with {:?} channels to client",
@@ -1210,15 +1227,16 @@ pub async fn update_group(
             category    = $4,
             icon        = $5,
             parent_id   = $6,
+            enable_groupshelf = $7,
             updated_at  = CURRENT_TIMESTAMP
             WHERE g.id = $1
             AND (
-                g.user_id = $7
+                g.user_id = $8
                 OR EXISTS (
                 SELECT 1
                 FROM group_members gm
                 WHERE gm.group_id = g.id
-                    AND gm.user_id = $7
+                    AND gm.user_id = $8
                     AND gm.role IN ('admin', 'editor')
                 )
             )
@@ -1234,6 +1252,7 @@ pub async fn update_group(
             .bind(&payload.category)
             .bind(&payload.icon)
             .bind(&payload.parent_id)
+            .bind(&payload.enable_groupshelf)
             .bind(&user_id)
             .fetch_one(&db),
     )
@@ -1271,6 +1290,10 @@ pub async fn update_group(
     let animes_pattern = format!("user:{}:animes:*", user_id);
     if let Err(e) = inner.redis_cache.del_pattern(&animes_pattern).await {
         tracing::warn!("update_group: redis DEL animes error: {:?}", e);
+    }
+    let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+    if let Err(e) = inner.redis_cache.del_pattern(&groupshelf_pattern).await {
+        tracing::warn!("update_group: redis DEL groupshelf error: {:?}", e);
     }
 
     Ok(Json(CreateGroupResponse {
