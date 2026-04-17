@@ -25,6 +25,8 @@ pub struct Model {
     pub display_order: Option<f64>,
     #[sea_orm(column_type = "Text", nullable)]
     pub parent_id: Option<String>,
+    #[sea_orm(column_type = "Boolean", nullable)]
+    pub enable_groupshelf: Option<bool>,
     #[sea_orm(has_many)]
     pub channels: HasMany<super::channels::Entity>,
     #[sea_orm(has_many)]

@@ -29,6 +29,8 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/animes", get(animes::all_animes_v3))
         .route("/api/v3/websites", get(websites::all_websites_v3))
         .route("/api/v3/groups", get(groups::all_groups_v3))
+        .route("/api/v3/groups/shelf", get(groups::get_groupshelf_groups))
+        .route("/api/v3/groups/shelf/copy/{group_id}", post(groups::copy_groupshelf_group))
         .route("/api/v3/groups/{group_id}/channels", post(groups::create_channel_in_group))
         .route("/api/v3/groups/{group_id}/videos", get(groups::get_group_videos))
         .route("/api/v3/groups/{group_id}/videos", delete(groups::delete_group_videos))
