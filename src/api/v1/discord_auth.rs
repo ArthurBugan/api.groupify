@@ -3,6 +3,7 @@ use axum::{
     response::{IntoResponse, Redirect},
     Json,
 };
+use axum::http::HeaderMap;
 use oauth2::{reqwest::async_http_client, AuthorizationCode, TokenResponse};
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
@@ -34,9 +35,24 @@ pub struct AuthQueryParams {
     pub origin: Option<String>,
 }
 
+fn is_mobile_browser(headers: &HeaderMap) -> bool {
+    if let Some(user_agent) = headers.get("user-agent") {
+        if let Ok(ua) = user_agent.to_str() {
+            let ua_lower = ua.to_lowercase();
+            return ua_lower.contains("mobile")
+                || ua_lower.contains("android")
+                || ua_lower.contains("iphone")
+                || ua_lower.contains("ipad")
+                || ua_lower.contains("ipod");
+        }
+    }
+    false
+}
+
 #[tracing::instrument(name = "Discord OAuth callback", skip(cookies, inner, query), fields(code_length = query.code.len()))]
 pub async fn discord_callback(
     cookies: Cookies,
+    headers: HeaderMap,
     State(inner): State<InnerState>,
     Query(query): Query<AuthRequest>,
 ) -> Result<impl IntoResponse, AppError> {
@@ -155,18 +171,24 @@ pub async fn discord_callback(
         == "development";
 
     let protocol = if is_development { "http" } else { "https" };
-    let mut redirect_url = format!(
-        "{}://{}/dashboard?auth=success&provider=discord",
-        protocol, frontend_url
-    );
 
-    if let Some(state) = query.state {
-        let parts: Vec<&str> = state.splitn(2, '-').collect();
-        if parts.len() == 2 {
-            let origin_value = parts[1];
-            redirect_url = format!("{}{}", redirect_url, format!("&origin={}", origin_value));
+    let redirect_url = if is_mobile_browser(&headers) {
+        format!("{}://{}/oauth?token={}", protocol, domain, token)
+    } else {
+        let mut url = format!(
+            "{}://{}/dashboard?auth=success&provider=discord",
+            protocol, frontend_url
+        );
+
+        if let Some(state) = query.state {
+            let parts: Vec<&str> = state.splitn(2, '-').collect();
+            if parts.len() == 2 {
+                let origin_value = parts[1];
+                url = format!("{}{}", url, format!("&origin={}", origin_value));
+            }
         }
-    }
+        url
+    };
 
     tracing::info!(
         "Discord OAuth callback completed successfully for: {}",
