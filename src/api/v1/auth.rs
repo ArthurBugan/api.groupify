@@ -57,7 +57,7 @@ pub async fn google_callback(
     tracing::info!("Processing Google OAuth callback");
 
     let InnerState {
-        db, oauth_clients, ..
+        db, oauth_clients, redis_cache, ..
     } = inner;
     let domain = std::env::var("GROUPIFY_HOST").expect("GROUPIFY_HOST must be set.");
 
@@ -182,6 +182,12 @@ pub async fn google_callback(
         &original_email,
     )
     .await?;
+
+    let user_id = get_user_id_from_email(&db, &email).await?;
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("google_callback: redis DEL channels error: {:?}", e);
+    }
 
         // Check if we're in development mode
     let is_development = std::env::var("ENVIRONMENT")

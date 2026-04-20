@@ -280,7 +280,7 @@ pub async fn delete_account(
     cookies: Cookies,
     State(inner): State<InnerState>,
 ) -> Result<Json<Value>, AppError> { // Changed return type
-    let InnerState { db, .. } = inner;
+    let InnerState { db, redis_cache, .. } = inner;
 
     let auth_token = cookies
         .get("auth-token")
@@ -289,6 +289,11 @@ pub async fn delete_account(
 
     // Now get_user_id_from_token returns Result<String, AppError>
     let user_id = get_user_id_from_token(auth_token?).await?;
+
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("delete_account: redis DEL channels error: {:?}", e);
+    }
 
     sqlx::query!("DELETE FROM channels WHERE user_id = $1", &user_id)
         .execute(&db)
@@ -337,6 +342,21 @@ pub async fn delete_account(
         .execute(&db)
         .await
         .map_err(|e| AppError::Database(anyhow::Error::from(e).context("Failed to delete user")))?;
+
+    let groups_pattern = format!("user:{}:groups:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groups_pattern).await {
+        tracing::warn!("delete_account: redis DEL groups error: {:?}", e);
+    }
+
+    let animes_pattern = format!("user:{}:animes:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&animes_pattern).await {
+        tracing::warn!("delete_account: redis DEL animes error: {:?}", e);
+    }
+
+    let groupshelf_pattern = format!("user:{}:groupshelf:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&groupshelf_pattern).await {
+        tracing::warn!("delete_account: redis DEL groupshelf error: {:?}", e);
+    }
 
     Ok(Json(json!({ "success": "true" })))
 }

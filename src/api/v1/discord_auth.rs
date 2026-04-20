@@ -59,7 +59,7 @@ pub async fn discord_callback(
     tracing::info!("Processing Discord OAuth callback");
 
     let InnerState {
-        db, oauth_clients, ..
+        db, oauth_clients, redis_cache, ..
     } = inner;
 
     tracing::debug!("Exchanging authorization code for access token");
@@ -163,6 +163,11 @@ pub async fn discord_callback(
 
     // Use the utility function instead of duplicated code
     setup_auth_cookie(&token, &domain, &cookies);
+
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("discord_callback: redis DEL channels error: {:?}", e);
+    }
 
     // Check if we're in development mode
     let is_development = std::env::var("ENVIRONMENT")

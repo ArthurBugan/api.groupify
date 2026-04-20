@@ -639,7 +639,7 @@ pub async fn sync_group_videos(
     .await
     .map_err(|e| {
         tracing::error!("No Google session found for user {}: {:?}", email, e);
-        AppError::Authentication(anyhow::anyhow!("Google session not found. Please connect your Google account."))
+        AppError::Validation(String::from("Google session not found. Please connect your Google account."))
     })?;
 
     let expires_at: chrono::DateTime<chrono::Utc> = session.get("expires_at");
