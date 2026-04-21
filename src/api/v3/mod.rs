@@ -27,6 +27,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
     Router::new()
         .route("/api/v3/health", get(|| async { "v3 health check ok!" }))
         .route("/api/v3/animes", get(animes::all_animes_v3))
+        .route("/api/v3/animes/{id}", get(animes::get_anime_v3))
         .route("/api/v3/websites", get(websites::all_websites_v3))
         .route("/api/v3/groups", get(groups::all_groups_v3))
         .route("/api/v3/groups/shelf", get(groups::get_groupshelf_groups))

@@ -524,7 +524,7 @@ pub async fn save_youtube_channels(
         channels.len()
     );
 
-    let InnerState { db, .. } = inner;
+    let InnerState { db, redis_cache, .. } = inner;
 
     let auth_token = cookies
         .get("auth-token")
@@ -597,16 +597,20 @@ pub async fn save_youtube_channels(
         tracing::debug!("save_youtube_channels: Successfully deleted existing channels");
     }
 
-    tracing::info!(
+tracing::info!(
         "save_youtube_channels: Bulk inserting {} new channels",
         channels.len()
     );
-    if let Err(e) = bulk_insert_channels(&db, user_id, &channels).await {
+    if let Err(e) = bulk_insert_channels(&db, user_id.clone(), &channels).await {
         tracing::error!(
-            "save_youtube_channels: Failed to bulk insert channels: {:?}",
-            e
+            "save_youtube_channels: Failed to bulk insert channels: {:?}", e
         );
         return Err(e);
+    }
+
+    let channels_pattern = format!("user:{}:channels:*", user_id);
+    if let Err(e) = redis_cache.del_pattern(&channels_pattern).await {
+        tracing::warn!("save_youtube_channels: redis DEL channels error: {:?}", e);
     }
 
     let duration = start_time.elapsed();

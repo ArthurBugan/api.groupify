@@ -1,10 +1,10 @@
 use anyhow::Result;
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     Json,
 };
 use sea_orm::{
-    ColumnTrait, Condition, EntityTrait, FromQueryResult, JoinType, Order,
+    ColumnTrait, EntityTrait, JoinType, Order,
     QueryFilter, QueryOrder, QuerySelect, RelationTrait, sea_query::Expr,
 };
 use tower_cookies::Cookies;
@@ -170,4 +170,130 @@ pub async fn all_animes_v3(
     let _ = redis_cache.set_json(&cache_key, &response, 300).await;
 
     Ok(Json(response))
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, sea_orm::FromQueryResult)]
+#[serde(rename_all = "camelCase")]
+pub struct AnimeDetailResponse {
+    pub id: String,
+    pub name: String,
+    pub content_type: Option<String>,
+    pub channel_id: Option<String>,
+    pub thumbnail: Option<String>,
+    pub url: Option<String>,
+    pub group_name: Option<String>,
+    pub group_icon: Option<String>,
+    pub average_rating: Option<f64>,
+    pub launch_year: Option<i32>,
+    pub user_owned: bool,
+}
+
+#[tracing::instrument(name = "Get anime by ID", skip(cookies, inner))]
+pub async fn get_anime_v3(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(id): Path<String>,
+) -> Result<Json<AnimeDetailResponse>, AppError> {
+    let InnerState {
+        sea_db,
+        redis_cache,
+        ..
+    } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    let cache_key = format!("user:{}:anime:{}", user_id, id);
+
+    if let Ok(Some(cached)) = redis_cache
+        .get_json::<AnimeDetailResponse>(&cache_key)
+        .await
+    {
+        return Ok(Json(cached));
+    }
+
+    if let Some(anime) = channels::Entity::find()
+        .filter(channels::Column::Id.eq(id.clone()))
+        .filter(channels::Column::UserId.eq(user_id.clone()))
+        .filter(channels::Column::ContentType.eq("anime"))
+        .join(JoinType::LeftJoin, channels::Relation::Groups.def())
+        .select_only()
+        .column(channels::Column::Id)
+        .column(channels::Column::Name)
+        .column(channels::Column::ContentType)
+        .column(channels::Column::ChannelId)
+        .column(channels::Column::Thumbnail)
+        .column(channels::Column::Url)
+        .column_as(groups::Column::Name, "group_name")
+        .column_as(groups::Column::Icon, "group_icon")
+        .expr_as(Expr::cust("NULL"), "average_rating")
+        .expr_as(Expr::cust("NULL"), "launch_year")
+        .into_model::<AnimeDetailResponse>()
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+    {
+        let response = AnimeDetailResponse {
+            id: anime.id.clone(),
+            name: anime.name.clone(),
+            content_type: anime.content_type.clone(),
+            channel_id: anime.channel_id.clone(),
+            thumbnail: anime.thumbnail.clone(),
+            url: anime.url.clone(),
+            group_name: anime.group_name.clone(),
+            group_icon: anime.group_icon.clone(),
+            average_rating: anime.average_rating.clone(),
+            launch_year: anime.launch_year.clone(),
+            user_owned: true,
+        };
+
+        let _ = redis_cache.set_json(&cache_key, &response, 300).await;
+        return Ok(Json(response));
+    }
+
+    if let Some(anime) = crunchyroll_channels::Entity::find()
+        .filter(crunchyroll_channels::Column::Id.eq(id.clone()))
+        .select_only()
+        .column(crunchyroll_channels::Column::Id)
+        .column_as(crunchyroll_channels::Column::Title, "name")
+        .expr_as(Expr::cust("'anime'"), "content_type")
+        .expr_as(Expr::cust("COALESCE(crunchyroll_channels.channel_id, '')"), "channel_id")
+        .column_as(crunchyroll_channels::Column::PosterImageUrl, "thumbnail")
+        .column_as(crunchyroll_channels::Column::Id, "url")
+        .expr_as(Expr::cust("NULL"), "group_name")
+        .expr_as(Expr::cust("NULL"), "group_icon")
+        .column_as(crunchyroll_channels::Column::AverageRating, "average_rating")
+        .column(crunchyroll_channels::Column::LaunchYear)
+        .into_model::<AnimeDetailResponse>()
+        .one(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?
+    {
+        let response = AnimeDetailResponse {
+            id: anime.id.clone(),
+            name: anime.name.clone(),
+            content_type: anime.content_type.clone(),
+            channel_id: anime.channel_id.clone(),
+            thumbnail: anime.thumbnail.clone(),
+            url: anime.url.clone(),
+            group_name: anime.group_name.clone(),
+            group_icon: anime.group_icon.clone(),
+            average_rating: anime.average_rating.clone(),
+            launch_year: anime.launch_year.clone(),
+            user_owned: false,
+        };
+
+        let _ = redis_cache.set_json(&cache_key, &response, 300).await;
+        return Ok(Json(response));
+    }
+
+    Err(AppError::NotFound(format!("Anime with id {} not found", id)))
 }
