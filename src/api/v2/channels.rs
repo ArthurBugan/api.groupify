@@ -165,16 +165,18 @@ pub async fn all_channels(
                 SELECT yc.id, yc.user_id, NULL as group_id, yc.name, yc.channel_id, yc.thumbnail, yc.created_at, yc.updated_at, NULL as group_name, NULL as group_icon, yc.url, 'youtube' as content_type 
                 FROM youtube_channels yc 
                 WHERE yc.user_id = $1 AND NOT EXISTS (SELECT 1 FROM channels c2 WHERE c2.name = yc.name AND c2.user_id = yc.user_id)
-            )
-            SELECT * FROM (
+            ),
+            combined AS (
                 SELECT * FROM user_channels 
                 UNION ALL 
                 SELECT * FROM user_youtube_channels
-            ) combined 
-            WHERE LOWER(REPLACE(name, ' ', '')) LIKE LOWER(REPLACE($2, ' ', '')) 
-               OR LOWER(REPLACE(COALESCE(group_name,''), ' ', '')) LIKE LOWER(REPLACE($2, ' ', ''))
-            ORDER BY created_at DESC 
-            LIMIT $3 OFFSET $4
+            ),
+            filtered AS (
+                SELECT * FROM combined 
+                WHERE LOWER(REPLACE(name, ' ', '')) LIKE LOWER(REPLACE($2, ' ', '')) 
+                   OR LOWER(REPLACE(COALESCE(group_name,''), ' ', '')) LIKE LOWER(REPLACE($2, ' ', ''))
+            )
+            SELECT * FROM filtered ORDER BY created_at DESC LIMIT $3 OFFSET $4
         "#
     } else {
         r#"
