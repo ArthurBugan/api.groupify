@@ -1024,3 +1024,144 @@ pub async fn copy_groupshelf_group(
 
     Ok(Json(ApiResponse::success(response_group)))
 }
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, sea_orm::FromQueryResult)]
+pub struct SubgroupFlat {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub parent_id: Option<String>,
+    pub nesting_level: Option<i32>,
+    pub display_order: Option<f64>,
+    pub enable_groupshelf: Option<bool>,
+    pub channel_id: String,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct SubgroupResponse {
+    pub id: String,
+    pub name: String,
+    pub icon: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub parent_id: Option<String>,
+    pub nesting_level: Option<i32>,
+    pub display_order: Option<f64>,
+    pub enable_groupshelf: Option<bool>,
+    pub channel_id: String,
+    #[serde(default)]
+    pub subgroups: Vec<SubgroupResponse>,
+}
+
+fn build_subgroup_tree(
+    all_groups: &[SubgroupFlat],
+    parent_id: &str,
+) -> Vec<SubgroupResponse> {
+    all_groups
+        .iter()
+        .filter(|g| g.parent_id.as_deref() == Some(parent_id))
+        .map(|g| {
+            let children = build_subgroup_tree(all_groups, &g.id);
+            SubgroupResponse {
+                id: g.id.clone(),
+                name: g.name.clone(),
+                icon: g.icon.clone(),
+                description: g.description.clone(),
+                category: g.category.clone(),
+                parent_id: g.parent_id.clone(),
+                nesting_level: g.nesting_level,
+                display_order: g.display_order,
+                enable_groupshelf: g.enable_groupshelf,
+                channel_id: g.channel_id.clone(),
+                subgroups: children,
+            }
+        })
+        .collect()
+}
+
+#[tracing::instrument(name = "Get subgroups by channel ID", skip(cookies, inner))]
+pub async fn get_subgroups_by_channel(
+    cookies: Cookies,
+    State(inner): State<InnerState>,
+    Path(channel_id): Path<String>,
+) -> Result<Json<Vec<SubgroupResponse>>, AppError> {
+    let InnerState {
+        sea_db,
+        redis_cache,
+        ..
+    } = inner;
+
+    let auth_token = cookies
+        .get("auth-token")
+        .map(|c| c.value().to_string())
+        .unwrap_or_default();
+
+    if auth_token.is_empty() {
+        return Err(AppError::Authentication(anyhow::anyhow!("Missing token")));
+    }
+
+    let user_id = get_user_id_from_token(auth_token).await?;
+
+    let cache_key = format!("user:{}:subgroups:{}", user_id, channel_id);
+
+    if let Ok(Some(cached)) = redis_cache
+        .get_json::<Vec<SubgroupResponse>>(&cache_key)
+        .await
+    {
+        return Ok(Json(cached));
+    }
+
+    let subgroups_flat: Vec<SubgroupFlat> = groups::Entity::find()
+        .filter(groups::Column::UserId.eq(user_id.clone()))
+        .filter(groups::Column::ParentId.is_not_null())
+        .join(JoinType::InnerJoin, groups::Relation::Channels.def())
+        .filter(channels::Column::Id.eq(channel_id.clone()))
+        .filter(channels::Column::UserId.eq(user_id.clone()))
+        .select_only()
+        .column(groups::Column::Id)
+        .column(groups::Column::Name)
+        .column(groups::Column::Icon)
+        .column(groups::Column::Description)
+        .column(groups::Column::Category)
+        .column(groups::Column::ParentId)
+        .column(groups::Column::NestingLevel)
+        .column(groups::Column::DisplayOrder)
+        .column(groups::Column::EnableGroupshelf)
+        .column(channels::Column::Id)
+        .into_model::<SubgroupFlat>()
+        .all(&sea_db)
+        .await
+        .map_err(AppError::SeaORM)?;
+
+    let parent_ids: std::collections::HashSet<_> = subgroups_flat
+        .iter()
+        .filter_map(|g| g.parent_id.clone())
+        .collect();
+
+    let top_level_groups: Vec<SubgroupResponse> = subgroups_flat
+        .iter()
+        .filter(|g| g.parent_id.is_some() && !parent_ids.contains(&g.id))
+        .map(|g| {
+            let children = build_subgroup_tree(&subgroups_flat, &g.id);
+            SubgroupResponse {
+                id: g.id.clone(),
+                name: g.name.clone(),
+                icon: g.icon.clone(),
+                description: g.description.clone(),
+                category: g.category.clone(),
+                parent_id: g.parent_id.clone(),
+                nesting_level: g.nesting_level,
+                display_order: g.display_order,
+                enable_groupshelf: g.enable_groupshelf,
+                channel_id: g.channel_id.clone(),
+                subgroups: children,
+            }
+        })
+        .collect();
+
+    let _ = redis_cache.set_json(&cache_key, &top_level_groups, 300).await;
+
+    Ok(Json(top_level_groups))
+}
