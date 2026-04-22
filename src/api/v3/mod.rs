@@ -32,7 +32,7 @@ pub fn create_v3_router(state: InnerState) -> Router<InnerState> {
         .route("/api/v3/groups", get(groups::all_groups_v3))
         .route("/api/v3/groups/shelf", get(groups::get_groupshelf_groups))
         .route("/api/v3/groups/shelf/copy/{group_id}", post(groups::copy_groupshelf_group))
-        .route("/api/v3/groups/subgroups/{channel_id}", get(groups::get_subgroups_by_channel))
+        .route("/api/v3/groups/subgroups/{group_id}", get(groups::get_subgroups_by_channel))
         .route("/api/v3/groups/{group_id}/channels", post(groups::create_channel_in_group))
         .route("/api/v3/groups/{group_id}/videos", get(groups::get_group_videos))
         .route("/api/v3/groups/{group_id}/videos", delete(groups::delete_group_videos))
