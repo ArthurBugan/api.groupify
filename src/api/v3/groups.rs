@@ -317,7 +317,7 @@ pub async fn create_channel_in_group(
 
     // Create the channel
     let new_channel = channels::ActiveModel {
-        id: Set(channel_id.split('/').next().unwrap().to_string()),
+        id: Set(Uuid::new_v4().to_string()),
         group_id: Set(target_group_id.clone()),
         user_id: Set(user_id.clone()),
         name: Set(payload.name),
